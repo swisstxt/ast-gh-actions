@@ -1,4 +1,4 @@
-name: "GCP Fabric Upstream Tag Sync"
+name: "Upstream Tag Sync"
 description: "Creates a PR when new tags are detected in the upstream Cloud Foundation Fabric repository"
 branding:
   icon: "git-pull-request"
