@@ -79,7 +79,7 @@ async function run() {
         await exec.exec('git', ['push',
             `https://x-access-token:${token}@github.com/${targetRepo}.git`,
             branchName,
-            '--force'
+            '--force-with-lease'
         ]);
 
         // Get repository default branch
