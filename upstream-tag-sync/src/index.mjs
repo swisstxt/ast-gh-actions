@@ -142,7 +142,7 @@ ${commonChanges}`;
         await octokit.rest.issues.addLabels({
             owner: targetOwner,
             repo: targetRepoName,
-            issue_number: pr.number,
+            issue_number: pr.number, // Note that PRs are issues
             labels: labels
         });
 
