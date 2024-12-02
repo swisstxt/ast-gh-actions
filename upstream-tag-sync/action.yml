@@ -1,18 +1,23 @@
-name: "Upstream Tag Sync"
-description: "Creates a PR when new tags are detected in the upstream repository"
+name: 'Upstream Tag Sync'
+description: 'Creates a PR when new tags are detected in an upstream repository, allowing controlled synchronization with upstream releases'
 branding:
-  icon: "git-pull-request"
-  color: "blue"
+  icon: 'git-pull-request'
+  color: 'blue'
 inputs:
   target-repo:
-    description: "Repository to sync (format: owner/repo)"
+    description: 'Repository to sync (format: owner/repo)'
     required: true
   upstream-repo:
-    description: "Upstream repository to sync from"
+    description: 'Upstream repository to sync from (format: owner/repo)'
     required: true
   github-token:
-    description: "GitHub token for authentication"
+    description: |
+      GitHub token for authentication. Can be provided as:
+      - GitHub Actions token (${{ secrets.GITHUB_TOKEN }}) for same-repository operations
+      - GitHub App installation token (recommended for cross-repository usage)
+      - Personal Access Token (PAT) stored as a secret
+      Cannot be defaulted in the action due to security scoping - tokens are only valid in the context of the calling workflow.
     required: true
 runs:
-  using: "node20"
-  main: "dist/index.js"
+  using: 'node20'
+  main: 'dist/index.mjs'

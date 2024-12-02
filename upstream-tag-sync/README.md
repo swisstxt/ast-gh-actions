@@ -33,27 +33,113 @@ jobs:
 | `upstream-repo` | Upstream repository to sync from | Yes | - |
 | `github-token` | GitHub token for authentication | Yes | - |
 
+### Authentication Options
+
+For the `github-token` input, you have several options:
+
+1. **GitHub Actions Token** (`${{ secrets.GITHUB_TOKEN }}`):
+   - Default token provided by GitHub Actions
+   - Only works when the workflow runs in the same repository you're trying to sync
+   - Automatically expires after the workflow run
+
+2. **GitHub App** (Recommended for cross-repo usage):
+   - Create and install a GitHub App on your repositories
+   - Use installation tokens
+   - More secure due to granular permissions and automatic token rotation
+   - Not tied to a personal account
+
+3. **Personal Access Token (PAT)**:
+   - Can be used for cross-repository access
+   - Store as a secret and use like `${{ secrets.YOUR_PAT }}`
+   - Consider using fine-grained PATs for more precise permission control
+
 ## What it does
 
 1. Monitors the upstream repository for new tags
-2. When a new tag is detected:
+2. When a new tag is detected and hasn't been processed before:
    - Creates a new branch
-   - Syncs the branch with the upstream tag
-   - Creates a pull request
-   - Adds the 'sync-upstream' label
-3. Avoids creating duplicate PRs for the same tag
-4. Provides detailed PR descriptions with change information
+   - Attempts to merge the upstream tag
+   - If merge conflicts occur:
+     - Preserves the conflicting state for manual resolution
+     - Creates a PR with conflict markers and resolution instructions
+   - If no conflicts:
+     - Creates a regular sync PR
+3. Avoids creating duplicate PRs for the same tag by tracking processed tags through labels
+4. Provides detailed PR descriptions with change information and appropriate instructions
 
-## Example PR
+## Managing Sync PRs
 
-The created PR will look like this:
+When a sync PR is created, you'll see one of two scenarios:
+
+### 1. PR without Conflicts
+
+The PR will have a clean merge state and you can:
+
+- Review and merge the PR to sync with the tag
+- Close the PR without merging to skip this tag
+- Delete the temporary branch after either action
+
+### 2. PR with Conflicts
+
+The PR will be marked with '[Conflicts]' in the title and include detailed resolution instructions:
+
+1. Checkout the PR branch locally
+2. Resolve the conflicts manually
+3. Push the resolved changes back
+4. Review and merge the updated PR
+   - Or close it to skip this tag
+5. Delete the temporary branch after completion
+
+## Example PR Messages
+
+### Without Conflicts
 
 ```markdown
 This PR syncs your fork with the upstream repository's tag v1.0.0.
 
 ## Changes included:
-- Merges all changes up to tag v1.0.0
+- Successfully merged with tag v1.0.0
 - Updates from: https://github.com/GoogleCloudPlatform/cloud-foundation-fabric
 
-Please review the changes and merge if everything looks good.
+Please review the changes and:
+- If you want to sync to this tag: merge the PR
+- If you don't want to sync: close the PR
+
+You can safely delete the `sync/upstream-v1.0.0` branch afterward.
 ```
+
+### With Conflicts
+
+```markdown
+This PR attempts to sync your fork with the upstream repository's tag v1.0.0.
+
+## ⚠️ Merge Conflicts Detected
+This PR contains merge conflicts that need to be resolved manually. Please:
+1. Checkout this branch locally
+2. Resolve the conflicts
+3. Push the resolved changes back to this branch
+
+### Next Steps:
+1. Resolve conflicts between your customizations and upstream changes
+2. Once conflicts are resolved:
+   - If you want to sync to this tag: merge the PR
+   - If you don't want to sync: close the PR
+3. You can safely delete the `sync/upstream-v1.0.0` branch afterward
+
+## Changes included:
+- Attempted merge with tag v1.0.0
+- Updates from: https://github.com/GoogleCloudPlatform/cloud-foundation-fabric
+```
+
+## Labels
+
+The action uses:
+
+- Tag-specific labels (e.g., `sync/upstream-v1.0.0`) to track processed tags
+- `merge-conflicts` label for PRs that require manual conflict resolution
+
+These labels help:
+
+- Prevent duplicate PRs for the same tag
+- Identify PRs requiring manual intervention
+- Track which tags have been processed (whether merged or skipped)

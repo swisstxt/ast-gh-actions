@@ -3,8 +3,9 @@
     "version": "1.0.0",
     "description": "GitHub Action to sync repositories with upstream tags",
     "main": "dist/index.js",
+    "type": "module",
     "scripts": {
-        "build": "ncc build src/index.js -o dist",
+        "build": "ncc build src/index.mjs -o dist",
         "prepare": "npm run build"
     },
     "dependencies": {
