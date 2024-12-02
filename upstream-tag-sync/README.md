@@ -131,15 +131,33 @@ This PR contains merge conflicts that need to be resolved manually. Please:
 - Updates from: https://github.com/GoogleCloudPlatform/cloud-foundation-fabric
 ```
 
-## Labels
+## How Tag Processing Works
 
-The action uses:
+The action uses labels to track which upstream tags have been processed, making it safe and easy to manage your synchronization:
 
-- Tag-specific labels (e.g., `sync/upstream-v1.0.0`) to track processed tags
-- `merge-conflicts` label for PRs that require manual conflict resolution
+1. When a new upstream tag is detected, the action:
+   - Creates a branch named `sync/upstream-${tag}`
+   - Creates a PR from this branch
+   - Adds a label `sync/upstream-${tag}` to the PR
 
-These labels help:
+2. For each run, the action:
+   - Checks for PRs with the tag-specific label (regardless of PR status)
+   - If a PR with this label exists (open, closed, or merged), the tag is considered "processed"
+   - This means you won't get duplicate PRs for tags you've already handled
 
-- Prevent duplicate PRs for the same tag
-- Identify PRs requiring manual intervention
-- Track which tags have been processed (whether merged or skipped)
+3. After processing a PR, you can:
+   - Merge it to sync with the tag
+   - Close it to skip the tag
+   - Safely delete the `sync/upstream-${tag}` branch
+   - The label ensures the action won't create another PR for this tag
+
+### Labels Used
+
+- `sync/upstream-${tag}`: Tracks which tags have been processed
+- `merge-conflicts`: Identifies PRs requiring manual conflict resolution
+
+This approach means:
+
+- You maintain control over which tags to sync with
+- Branch cleanup won't affect tag tracking
+- The action's state is tracked through PR labels, not branches
