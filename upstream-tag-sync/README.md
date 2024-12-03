@@ -178,6 +178,6 @@ Current workaround in package.json:
 ```json
 {
   "scripts": {
-    "build": "bun install && bun build src/index.ts --outdir=dist --target=node --entry-naming [name].mjs"
+    "build": "bun install && bun build src/index.ts --outdir=dist --target=node --entry-naming '[name].mjs'"
   }
 }

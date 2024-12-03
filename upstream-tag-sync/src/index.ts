@@ -50,103 +50,102 @@ async function getLatestTag(octokit: OctokitClient, owner: string, repo: string)
 }
 
 async function run(): Promise<void> {
+    // Get inputs
+    const targetRepo = getInput('target-repo', { required: true });
+    const upstreamRepo = getInput('upstream-repo', { required: true });
+    const token = getInput('github-token', { required: true });
+
+    // Create octokit instance
+    const octokit = getOctokit(token);
+
+    info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
+
+    // Get latest upstream tag
+    const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
+    if (!upstreamOwner || !upstreamRepoName) {
+        throw new Error('Invalid upstream repository format');
+    }
+
+    const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
+    if (!latestTag) {
+        info('No valid tags found in upstream repository');
+        return;
+    }
+    info(`Latest upstream tag: ${latestTag}`);
+
+    // Check for existing PR
+    const [targetOwner, targetRepoName] = targetRepo.split('/');
+    if (!targetOwner || !targetRepoName) {
+        throw new Error('Invalid target repository format');
+    }
+
+    const labelName = `sync/upstream-${latestTag}`;
+
+    const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
+        q: `repo:${targetOwner}/${targetRepoName} is:pr label:"${labelName}"`,
+        per_page: 1
+    });
+
+    if (searchResults.total_count > 0) {
+        info(`PR for tag ${latestTag} already exists or was previously processed`);
+        return;
+    }
+
+    // Set up git configuration
+    await execCommand('git', ['config', '--global', 'user.name', 'github-actions[bot]']);
+    await execCommand('git', ['config', '--global', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
+
+    // Add upstream remote and fetch
+    await execCommand('git', ['remote', 'add', 'upstream', `https://github.com/${upstreamRepo}.git`]);
+    await execCommand('git', ['fetch', 'upstream', '--tags']);
+
+    // Create and switch to new branch
+    const branchName = `sync/upstream-${latestTag}`;
+    await execCommand('git', ['checkout', '-b', branchName]);
+
+    let hasConflicts = false;
+    let mergeMessage = '';
+
+    // Attempt to merge the upstream tag
     try {
-        // Get inputs
-        const targetRepo = getInput('target-repo', { required: true });
-        const upstreamRepo = getInput('upstream-repo', { required: true });
-        const token = getInput('github-token', { required: true });
+        await execCommand('git', ['merge', latestTag]);
+        mergeMessage = 'Successfully merged upstream tag';
+        info(mergeMessage);
+    } catch (error) {
+        hasConflicts = true;
+        mergeMessage = 'Merge conflicts detected. Manual resolution required.';
+        warning(mergeMessage);
 
-        // Create octokit instance
-        const octokit = getOctokit(token);
+        // Instead of hard reset, we'll push the conflicting state
+        // This allows reviewers to resolve conflicts manually
+        await execCommand('git', ['add', '.']);
+        await execCommand('git', ['commit', '--no-verify', '-m', 'WIP: Sync with upstream (conflicts to resolve)']);
+    }
 
-        info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
+    // Push to origin (with or without conflicts)
+    await execCommand('git', [
+        'push',
+        `https://x-access-token:${token}@github.com/${targetRepo}.git`,
+        branchName,
+        '--force-with-lease'
+    ]);
 
-        // Get latest upstream tag
-        const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
-        if (!upstreamOwner || !upstreamRepoName) {
-            throw new Error('Invalid upstream repository format');
-        }
+    // Get repository default branch
+    const { data: repo } = await octokit.rest.repos.get({
+        owner: targetOwner,
+        repo: targetRepoName
+    });
+    const defaultBranch = repo.default_branch;
 
-        const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
-        if (!latestTag) {
-            info('No valid tags found in upstream repository');
-            return;
-        }
-        info(`Latest upstream tag: ${latestTag}`);
-
-        // Check for existing PR
-        const [targetOwner, targetRepoName] = targetRepo.split('/');
-        if (!targetOwner || !targetRepoName) {
-            throw new Error('Invalid target repository format');
-        }
-
-        const labelName = `sync/upstream-${latestTag}`;
-
-        const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
-            q: `repo:${targetOwner}/${targetRepoName} is:pr label:"${labelName}"`,
-            per_page: 1
-        });
-
-        if (searchResults.total_count > 0) {
-            info(`PR for tag ${latestTag} already exists or was previously processed`);
-            return;
-        }
-
-        // Set up git configuration
-        await execCommand('git', ['config', '--global', 'user.name', 'github-actions[bot]']);
-        await execCommand('git', ['config', '--global', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
-
-        // Add upstream remote and fetch
-        await execCommand('git', ['remote', 'add', 'upstream', `https://github.com/${upstreamRepo}.git`]);
-        await execCommand('git', ['fetch', 'upstream', '--tags']);
-
-        // Create and switch to new branch
-        const branchName = `sync/upstream-${latestTag}`;
-        await execCommand('git', ['checkout', '-b', branchName]);
-
-        let hasConflicts = false;
-        let mergeMessage = '';
-
-        // Attempt to merge the upstream tag
-        try {
-            await execCommand('git', ['merge', latestTag]);
-            mergeMessage = 'Successfully merged upstream tag';
-            info(mergeMessage);
-        } catch (error) {
-            hasConflicts = true;
-            mergeMessage = 'Merge conflicts detected. Manual resolution required.';
-            warning(mergeMessage);
-
-            // Instead of hard reset, we'll push the conflicting state
-            // This allows reviewers to resolve conflicts manually
-            await execCommand('git', ['add', '.']);
-            await execCommand('git', ['commit', '--no-verify', '-m', 'WIP: Sync with upstream (conflicts to resolve)']);
-        }
-
-        // Push to origin (with or without conflicts)
-        await execCommand('git', [
-            'push',
-            `https://x-access-token:${token}@github.com/${targetRepo}.git`,
-            branchName,
-            '--force-with-lease'
-        ]);
-
-        // Get repository default branch
-        const { data: repo } = await octokit.rest.repos.get({
-            owner: targetOwner,
-            repo: targetRepoName
-        });
-        const defaultBranch = repo.default_branch;
-
-        // Common parts of the PR message
-        const commonHeader = `This PR ${hasConflicts ? 'attempts to' : ''} sync your fork with the upstream repository's tag ${latestTag}.`;
-        const commonChanges = `## Changes included:
+    // Common parts of the PR message
+    const commonHeader = `This PR ${hasConflicts ? 'attempts to' : ''} sync your fork with the upstream repository's tag ${latestTag}.`;
+    const commonChanges = `## Changes included:
 - ${hasConflicts ? 'Attempted merge' : 'Successfully merged'} with tag ${latestTag}
 - Updates from: https://github.com/${upstreamRepo}`;
-        const commonFooter = `You can safely delete the \`${branchName}\` branch afterward.`;
+    const commonFooter = `You can safely delete the \`${branchName}\` branch afterward.`;
 
-        // Create PR with appropriate message
-        const conflictInstructions = `## ⚠️ Merge Conflicts Detected
+    // Create PR with appropriate message
+    const conflictInstructions = `## ⚠️ Merge Conflicts Detected
 This PR contains merge conflicts that need to be resolved manually. Please:
 1. Checkout this branch locally
 2. Resolve the conflicts
@@ -159,51 +158,47 @@ This PR contains merge conflicts that need to be resolved manually. Please:
    - If you don't want to sync: close the PR
 3. ${commonFooter}`;
 
-        const normalInstructions = `Please review the changes and:
+    const normalInstructions = `Please review the changes and:
 - If you want to sync to this tag: merge the PR
 - If you don't want to sync: close the PR
 
 ${commonFooter}`;
 
-        const prBody = `${commonHeader}
+    const prBody = `${commonHeader}
 
 ${hasConflicts ? conflictInstructions : normalInstructions}
 
 ${commonChanges}`;
 
-        const { data: pr } = await octokit.rest.pulls.create({
-            owner: targetOwner,
-            repo: targetRepoName,
-            title: hasConflicts
-                ? `[Conflicts] Sync with upstream tag ${latestTag}`
-                : `Sync with upstream tag ${latestTag}`,
-            head: branchName,
-            base: defaultBranch,
-            body: prBody
-        });
+    const { data: pr } = await octokit.rest.pulls.create({
+        owner: targetOwner,
+        repo: targetRepoName,
+        title: hasConflicts
+            ? `[Conflicts] Sync with upstream tag ${latestTag}`
+            : `Sync with upstream tag ${latestTag}`,
+        head: branchName,
+        base: defaultBranch,
+        body: prBody
+    });
 
-        // Add appropriate labels
-        const labels = [labelName];
-        if (hasConflicts) {
-            labels.push('merge-conflicts');
-        }
-
-        await octokit.rest.issues.addLabels({
-            owner: targetOwner,
-            repo: targetRepoName,
-            issue_number: pr.number,  // Note that PRs are also issues on GitHub
-            labels: labels
-        });
-
-        info(`Created PR #${pr.number}${hasConflicts ? ' with merge conflicts' : ''}`);
-
-    } catch (error) {
-        if (error instanceof Error) {
-            setFailed(error.message);
-        } else {
-            setFailed('An unknown error occurred');
-        }
+    // Add appropriate labels
+    const labels = [labelName];
+    if (hasConflicts) {
+        labels.push('merge-conflicts');
     }
+
+    await octokit.rest.issues.addLabels({
+        owner: targetOwner,
+        repo: targetRepoName,
+        issue_number: pr.number,  // Note that PRs are also issues on GitHub
+        labels: labels
+    });
+
+    info(`Created PR #${pr.number}${hasConflicts ? ' with merge conflicts' : ''}`);
 }
 
-run();
+try {
+    await run();
+} catch (err: unknown) {
+    setFailed(err instanceof Error ? err.message : 'An unknown error occurred');
+}

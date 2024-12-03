@@ -23,7 +23,7 @@
         "build": "FIXME: Need to improve build script to handle source maps"
     },
     "scripts": {
-        "build": "bun install && bun build src/index.ts --outdir=dist --target=node --entry-naming [name].mjs",
+        "build": "bun install && bun build src/index.ts --outdir=dist --target=node --entry-naming '[name].mjs'",
         "lint": "eslint . --ext .ts",
         "format": "prettier --write \"src/**/*.ts\"",
         "format:check": "prettier --check \"src/**/*.ts\"",
