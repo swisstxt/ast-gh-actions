@@ -19,43 +19,45 @@ type OctokitClient = ReturnType<typeof getOctokit>;
  * @param {string} owner - Repository owner
  * @param {string} repo - Repository name
  * @returns {Promise<string|null>} Latest tag name or null if no valid tags found
+ * @throws {Error} If the API request fails
  */
 async function getLatestTag(octokit: OctokitClient, owner: string, repo: string): Promise<string | null> {
     try {
-        const allTags: Tag[] = [];
-        let page = 1;
+        const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
+            owner,
+            repo,
+            per_page: 100,
+        });
 
-        while (true) {
-            const response = await octokit.rest.repos.listTags({
-                owner,
-                repo,
-                per_page: 100,
-                page
-            });
+        const tags: Tag[] = [];
 
-            const { data: tags } = response;
-
-            if (tags.length === 0) {
-                break;
-            }
-
-            allTags.push(...tags);
-            page++;
+        for await (const { data: pageTags } of iterator) {
+            tags.push(...pageTags);
         }
 
-        if (allTags.length === 0) {
+        if (tags.length === 0) {
+            info('No tags found in repository');
             return null;
         }
 
-        const latestTag = allTags
-            .map((tag: Tag) => ({
+        // Process and sort tags
+        const validTags = tags
+            .map((tag): TagInfo => ({
                 name: tag.name,
                 version: semver.valid(semver.clean(tag.name))
             }))
-            .filter((tag: TagInfo) => tag.version !== null)
-            .sort((a: TagInfo, b: TagInfo) => semver.rcompare(a.version!, b.version!))[0];
+            .filter((tag): tag is TagInfo & { version: string } => tag.version !== null)
+            .sort((a, b) => semver.rcompare(a.version, b.version));
 
-        return latestTag ? latestTag.name : null;
+        if (validTags.length === 0) {
+            warning('No semver-compliant tags found in repository');
+            return null;
+        }
+
+        const latestTag = validTags[0];
+        info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
+        return latestTag.name;
+
     } catch (error) {
         if (error instanceof Error) {
             console.error('Error:', error.message);

@@ -24473,30 +24473,30 @@ var import_exec = __toESM(require_exec(), 1);
 var import_semver = __toESM(require_semver2(), 1);
 async function getLatestTag(octokit, owner, repo) {
   try {
-    const allTags = [];
-    let page = 1;
-    while (true) {
-      const response = await octokit.rest.repos.listTags({
-        owner,
-        repo,
-        per_page: 100,
-        page
-      });
-      const { data: tags } = response;
-      if (tags.length === 0) {
-        break;
-      }
-      allTags.push(...tags);
-      page++;
+    const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
+      owner,
+      repo,
+      per_page: 100
+    });
+    const tags = [];
+    for await (const { data: pageTags } of iterator) {
+      tags.push(...pageTags);
     }
-    if (allTags.length === 0) {
+    if (tags.length === 0) {
+      import_core.info("No tags found in repository");
       return null;
     }
-    const latestTag = allTags.map((tag) => ({
+    const validTags = tags.map((tag) => ({
       name: tag.name,
       version: import_semver.default.valid(import_semver.default.clean(tag.name))
-    })).filter((tag) => tag.version !== null).sort((a, b) => import_semver.default.rcompare(a.version, b.version))[0];
-    return latestTag ? latestTag.name : null;
+    })).filter((tag) => tag.version !== null).sort((a, b) => import_semver.default.rcompare(a.version, b.version));
+    if (validTags.length === 0) {
+      import_core.warning("No semver-compliant tags found in repository");
+      return null;
+    }
+    const latestTag = validTags[0];
+    import_core.info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
+    return latestTag.name;
   } catch (error) {
     if (error instanceof Error) {
       console.error("Error:", error.message);
