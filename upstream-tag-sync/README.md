@@ -161,3 +161,23 @@ This approach means:
 - You maintain control over which tags to sync with
 - Branch cleanup won't affect tag tracking
 - The action's state is tracked through PR labels, not branches
+
+## Known Issues
+
+### Build Output Format
+
+FIXME: Build script workaround for MJS output
+
+The current build script in `package.json` uses `--entry-naming [name].mjs` as a workaround for Bun's ESM output handling.
+This is a temporary solution pending resolution of [Bun Issue #7252](https://github.com/oven-sh/bun/issues/7252#issuecomment-2054172188).
+
+When fixed upstream, we should switch to using `--format=esm`.
+
+Current workaround in package.json:
+
+```json
+{
+  "scripts": {
+    "build": "bun install && bun build src/index.ts --outdir=dist --target=node --entry-naming [name].mjs"
+  }
+}

@@ -1,18 +1,28 @@
-import * as core from '@actions/core';
-import * as github from '@actions/github';
-import * as exec from '@actions/exec';
+import { getInput, info, warning, setFailed } from '@actions/core';
+import { getOctokit } from '@actions/github';
+import { exec as execCommand } from '@actions/exec';
+import type { components } from '@octokit/openapi-types';
+
+interface TagInfo {
+    name: string;
+    version: string | null;
+}
+
+type Tag = components['schemas']['tag'];
 import semver from 'semver';
+
+type OctokitClient = ReturnType<typeof getOctokit>;
 
 /**
  * Gets the name of the latest semver-compliant tag from a GitHub repository
- * @param {import('@octokit/rest').Octokit} octokit - Configured Octokit instance
+ * @param {OctokitClient} octokit - Configured Octokit instance
  * @param {string} owner - Repository owner
  * @param {string} repo - Repository name
  * @returns {Promise<string|null>} Latest tag name or null if no valid tags found
  */
-async function getLatestTag(octokit, owner, repo) {
+async function getLatestTag(octokit: OctokitClient, owner: string, repo: string): Promise<string | null> {
     try {
-        const { data: tags } = await octokit.repos.listTags({
+        const { data: tags } = await octokit.rest.repos.listTags({
             owner,
             repo,
             per_page: 100
@@ -23,39 +33,53 @@ async function getLatestTag(octokit, owner, repo) {
         }
 
         const latestTag = tags
-            .map(tag => ({
+            .map((tag: Tag) => ({
                 name: tag.name,
                 version: semver.valid(semver.clean(tag.name))
             }))
-            .filter(tag => tag.version !== null)
-            .sort((a, b) => semver.rcompare(a.version, b.version))[0];
+            .filter((tag: TagInfo) => tag.version !== null)
+            .sort((a: TagInfo, b: TagInfo) => semver.rcompare(a.version!, b.version!))[0];
 
         return latestTag ? latestTag.name : null;
     } catch (error) {
-        console.error('Error:', error.message);
+        if (error instanceof Error) {
+            console.error('Error:', error.message);
+        }
         throw error;
     }
 }
 
-async function run() {
+async function run(): Promise<void> {
     try {
         // Get inputs
-        const targetRepo = core.getInput('target-repo', { required: true });
-        const upstreamRepo = core.getInput('upstream-repo', { required: true });
-        const token = core.getInput('github-token', { required: true });
+        const targetRepo = getInput('target-repo', { required: true });
+        const upstreamRepo = getInput('upstream-repo', { required: true });
+        const token = getInput('github-token', { required: true });
 
         // Create octokit instance
-        const octokit = github.getOctokit(token);
+        const octokit = getOctokit(token);
 
-        core.info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
+        info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
 
         // Get latest upstream tag
         const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
+        if (!upstreamOwner || !upstreamRepoName) {
+            throw new Error('Invalid upstream repository format');
+        }
+
         const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
-        core.info(`Latest upstream tag: ${latestTag}`);
+        if (!latestTag) {
+            info('No valid tags found in upstream repository');
+            return;
+        }
+        info(`Latest upstream tag: ${latestTag}`);
 
         // Check for existing PR
         const [targetOwner, targetRepoName] = targetRepo.split('/');
+        if (!targetOwner || !targetRepoName) {
+            throw new Error('Invalid target repository format');
+        }
+
         const labelName = `sync/upstream-${latestTag}`;
 
         const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
@@ -64,43 +88,44 @@ async function run() {
         });
 
         if (searchResults.total_count > 0) {
-            core.info(`PR for tag ${latestTag} already exists or was previously processed`);
+            info(`PR for tag ${latestTag} already exists or was previously processed`);
             return;
         }
 
         // Set up git configuration
-        await exec.exec('git', ['config', '--global', 'user.name', 'github-actions[bot]']);
-        await exec.exec('git', ['config', '--global', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
+        await execCommand('git', ['config', '--global', 'user.name', 'github-actions[bot]']);
+        await execCommand('git', ['config', '--global', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
 
         // Add upstream remote and fetch
-        await exec.exec('git', ['remote', 'add', 'upstream', `https://github.com/${upstreamRepo}.git`]);
-        await exec.exec('git', ['fetch', 'upstream', '--tags']);
+        await execCommand('git', ['remote', 'add', 'upstream', `https://github.com/${upstreamRepo}.git`]);
+        await execCommand('git', ['fetch', 'upstream', '--tags']);
 
         // Create and switch to new branch
         const branchName = `sync/upstream-${latestTag}`;
-        await exec.exec('git', ['checkout', '-b', branchName]);
+        await execCommand('git', ['checkout', '-b', branchName]);
 
         let hasConflicts = false;
         let mergeMessage = '';
 
         // Attempt to merge the upstream tag
         try {
-            await exec.exec('git', ['merge', latestTag]);
+            await execCommand('git', ['merge', latestTag]);
             mergeMessage = 'Successfully merged upstream tag';
-            core.info(mergeMessage);
+            info(mergeMessage);
         } catch (error) {
             hasConflicts = true;
             mergeMessage = 'Merge conflicts detected. Manual resolution required.';
-            core.warning(mergeMessage);
+            warning(mergeMessage);
 
             // Instead of hard reset, we'll push the conflicting state
             // This allows reviewers to resolve conflicts manually
-            await exec.exec('git', ['add', '.']);
-            await exec.exec('git', ['commit', '--no-verify', '-m', 'WIP: Sync with upstream (conflicts to resolve)']);
+            await execCommand('git', ['add', '.']);
+            await execCommand('git', ['commit', '--no-verify', '-m', 'WIP: Sync with upstream (conflicts to resolve)']);
         }
 
         // Push to origin (with or without conflicts)
-        await exec.exec('git', ['push',
+        await execCommand('git', [
+            'push',
             `https://x-access-token:${token}@github.com/${targetRepo}.git`,
             branchName,
             '--force-with-lease'
@@ -166,14 +191,18 @@ ${commonChanges}`;
         await octokit.rest.issues.addLabels({
             owner: targetOwner,
             repo: targetRepoName,
-            issue_number: pr.number, // Note that PRs are issues
+            issue_number: pr.number,  // Note that PRs are also issues on GitHub
             labels: labels
         });
 
-        core.info(`Created PR #${pr.number}${hasConflicts ? ' with merge conflicts' : ''}`);
+        info(`Created PR #${pr.number}${hasConflicts ? ' with merge conflicts' : ''}`);
 
     } catch (error) {
-        core.setFailed(error.message);
+        if (error instanceof Error) {
+            setFailed(error.message);
+        } else {
+            setFailed('An unknown error occurred');
+        }
     }
 }
 

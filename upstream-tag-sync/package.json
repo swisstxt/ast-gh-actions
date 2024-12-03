@@ -1,17 +1,32 @@
 {
-  "name": "upstream-tag-sync-action",
-  "version": "1.0.0",
-  "main": "dist/index.js",
-  "devDependencies": {
-    "@actions/core": "^1.11.1",
-    "@actions/exec": "^1.1.1",
-    "@actions/github": "^6.0.0",
-    "@types/semver": "^7.5.8",
-    "semver": "^7.6.3"
-  },
-  "description": "GitHub Action to sync repositories with upstream tags",
-  "scripts": {
-    "build": "bun install && bun build src/index.ts --outdir=dist --target=node"
-  },
-  "type": "module"
+    "name": "upstream-tag-sync-action",
+    "version": "1.0.0",
+    "main": "dist/index.mjs",
+    "type": "module",
+    "devDependencies": {
+        "@actions/core": "^1.11.1",
+        "@actions/exec": "^1.1.1",
+        "@actions/github": "^6.0.0",
+        "@octokit/rest": "^20.0.0",
+        "@types/node": "^20.0.0",
+        "@types/semver": "^7.5.8",
+        "@typescript-eslint/eslint-plugin": "^6.0.0",
+        "@typescript-eslint/parser": "^6.0.0",
+        "eslint": "^8.0.0",
+        "eslint-config-prettier": "^9.0.0",
+        "prettier": "^3.0.0",
+        "semver": "^7.6.3",
+        "typescript": "^5.0.0"
+    },
+    "description": "GitHub Action to sync repositories with upstream tags",
+    "todos": {
+        "build": "FIXME: Need to improve build script to handle source maps"
+    },
+    "scripts": {
+        "build": "bun install && bun build src/index.ts --outdir=dist --target=node --entry-naming [name].mjs",
+        "lint": "eslint . --ext .ts",
+        "format": "prettier --write \"src/**/*.ts\"",
+        "format:check": "prettier --check \"src/**/*.ts\"",
+        "type-check": "tsc --noEmit"
+    }
 }
