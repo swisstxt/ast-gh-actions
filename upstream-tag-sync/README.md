@@ -1,6 +1,6 @@
 # Upstream Tag Sync Action
 
-This action monitors an upstream repository for new tags and automatically creates pull requests to sync a fork when new tags are detected.
+This action monitors an upstream repository for new semver compliant tags and automatically creates pull requests to sync a fork when new tags are detected.
 
 ## Usage
 

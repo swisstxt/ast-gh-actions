@@ -1,6 +1,41 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 import * as exec from '@actions/exec';
+import semver from 'semver';
+
+/**
+ * Gets the name of the latest semver-compliant tag from a GitHub repository
+ * @param {import('@octokit/rest').Octokit} octokit - Configured Octokit instance
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @returns {Promise<string|null>} Latest tag name or null if no valid tags found
+ */
+async function getLatestTag(octokit, owner, repo) {
+    try {
+        const { data: tags } = await octokit.repos.listTags({
+            owner,
+            repo,
+            per_page: 100
+        });
+
+        if (tags.length === 0) {
+            return null;
+        }
+
+        const latestTag = tags
+            .map(tag => ({
+                name: tag.name,
+                version: semver.valid(semver.clean(tag.name))
+            }))
+            .filter(tag => tag.version !== null)
+            .sort((a, b) => semver.rcompare(a.version, b.version))[0];
+
+        return latestTag ? latestTag.name : null;
+    } catch (error) {
+        console.error('Error:', error.message);
+        throw error;
+    }
+}
 
 async function run() {
     try {
@@ -16,18 +51,7 @@ async function run() {
 
         // Get latest upstream tag
         const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
-        const { data: tags } = await octokit.rest.repos.listTags({
-            owner: upstreamOwner,
-            repo: upstreamRepoName,
-            per_page: 1
-        });
-
-        if (!tags.length) {
-            core.info('No tags found in upstream repository');
-            return;
-        }
-
-        const latestTag = tags[0].name;
+        const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
         core.info(`Latest upstream tag: ${latestTag}`);
 
         // Check for existing PR
