@@ -24473,15 +24473,26 @@ var import_exec = __toESM(require_exec(), 1);
 var import_semver = __toESM(require_semver2(), 1);
 async function getLatestTag(octokit, owner, repo) {
   try {
-    const { data: tags } = await octokit.rest.repos.listTags({
-      owner,
-      repo,
-      per_page: 100
-    });
-    if (tags.length === 0) {
+    const allTags = [];
+    let page = 1;
+    while (true) {
+      const response = await octokit.rest.repos.listTags({
+        owner,
+        repo,
+        per_page: 100,
+        page
+      });
+      const { data: tags } = response;
+      if (tags.length === 0) {
+        break;
+      }
+      allTags.push(...tags);
+      page++;
+    }
+    if (allTags.length === 0) {
       return null;
     }
-    const latestTag = tags.map((tag) => ({
+    const latestTag = allTags.map((tag) => ({
       name: tag.name,
       version: import_semver.default.valid(import_semver.default.clean(tag.name))
     })).filter((tag) => tag.version !== null).sort((a, b) => import_semver.default.rcompare(a.version, b.version))[0];

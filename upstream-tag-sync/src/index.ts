@@ -22,17 +22,32 @@ type OctokitClient = ReturnType<typeof getOctokit>;
  */
 async function getLatestTag(octokit: OctokitClient, owner: string, repo: string): Promise<string | null> {
     try {
-        const { data: tags } = await octokit.rest.repos.listTags({
-            owner,
-            repo,
-            per_page: 100
-        });
+        const allTags: Tag[] = [];
+        let page = 1;
 
-        if (tags.length === 0) {
+        while (true) {
+            const response = await octokit.rest.repos.listTags({
+                owner,
+                repo,
+                per_page: 100,
+                page
+            });
+
+            const { data: tags } = response;
+
+            if (tags.length === 0) {
+                break;
+            }
+
+            allTags.push(...tags);
+            page++;
+        }
+
+        if (allTags.length === 0) {
             return null;
         }
 
-        const latestTag = tags
+        const latestTag = allTags
             .map((tag: Tag) => ({
                 name: tag.name,
                 version: semver.valid(semver.clean(tag.name))
