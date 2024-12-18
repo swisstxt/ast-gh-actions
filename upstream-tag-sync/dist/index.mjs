@@ -24471,147 +24471,165 @@ var import_core = __toESM(require_core(), 1);
 var import_github = __toESM(require_github(), 1);
 var import_exec = __toESM(require_exec(), 1);
 var import_semver = __toESM(require_semver2(), 1);
+async function retryWithBackoff(operation, maxAttempts = 5, baseDelay = 1000) {
+  for (let attempt = 1;attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      const error = err;
+      const isRateLimit = error.message.includes("rate limit") || error.message.includes("secondary rate limit");
+      if (!isRateLimit || attempt === maxAttempts) {
+        throw error;
+      }
+      const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+      import_core.info(`Rate limit hit, attempt ${attempt}/${maxAttempts}. Waiting ${Math.round(delay / 1000)}s...`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("Should not reach here due to throw in loop");
+}
 async function getLatestTag(octokit, owner, repo) {
+  import_core.info(`Fetching tags for ${owner}/${repo}`);
+  const tags = [];
   try {
     const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
       owner,
       repo,
       per_page: 100
     });
-    const tags = [];
     for await (const { data: pageTags } of iterator) {
       tags.push(...pageTags);
+      import_core.info(`Fetched ${tags.length} tags so far...`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    if (tags.length === 0) {
-      import_core.info("No tags found in repository");
-      return null;
-    }
-    const validTags = tags.map((tag) => ({
-      name: tag.name,
-      version: import_semver.default.valid(import_semver.default.clean(tag.name))
-    })).filter((tag) => tag.version !== null).sort((a, b) => import_semver.default.rcompare(a.version, b.version));
-    if (validTags.length === 0) {
-      import_core.warning("No semver-compliant tags found in repository");
-      return null;
-    }
-    const latestTag = validTags[0];
-    import_core.info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
-    return latestTag.name;
   } catch (error) {
-    if (error instanceof Error) {
-      console.error("Error:", error.message);
-    }
-    throw error;
+    import_core.info("Error fetching tags, retrying with backoff...");
+    return await retryWithBackoff(() => getLatestTag(octokit, owner, repo));
   }
+  if (tags.length === 0) {
+    import_core.info("No tags found in repository");
+    return null;
+  }
+  const validTags = tags.map((tag) => ({
+    name: tag.name,
+    version: import_semver.default.valid(import_semver.default.clean(tag.name))
+  })).filter((tag) => tag.version !== null).sort((a, b) => import_semver.default.rcompare(a.version, b.version));
+  if (validTags.length === 0) {
+    import_core.info("No semver-compliant tags found in repository");
+    return null;
+  }
+  const latestTag = validTags[0];
+  import_core.info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
+  return latestTag.name;
+}
+async function createSyncIssue(octokit, owner, repo, title, body, syncLabel) {
+  return retryWithBackoff(async () => {
+    const { data: issue } = await octokit.rest.issues.create({
+      owner,
+      repo,
+      title,
+      body,
+      labels: ["sync", syncLabel]
+    });
+    return issue.number;
+  });
+}
+async function updateIssue(octokit, owner, repo, issueNumber, body) {
+  await retryWithBackoff(() => octokit.rest.issues.update({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body
+  }));
+}
+async function getDefaultBranch(octokit, owner, repo) {
+  return retryWithBackoff(async () => {
+    const { data: repository } = await octokit.rest.repos.get({
+      owner,
+      repo
+    });
+    return repository.default_branch;
+  });
+}
+async function checkExistingSync(octokit, owner, repo, syncLabel) {
+  return retryWithBackoff(async () => {
+    const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
+      q: `repo:${owner}/${repo} label:"${syncLabel}"`,
+      per_page: 1
+    });
+    return searchResults.total_count > 0;
+  });
 }
 async function run() {
-  const targetRepo = import_core.getInput("target-repo", { required: true });
-  const upstreamRepo = import_core.getInput("upstream-repo", { required: true });
-  const token = import_core.getInput("github-token", { required: true });
-  const octokit = import_github.getOctokit(token);
-  import_core.info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
-  const [upstreamOwner, upstreamRepoName] = upstreamRepo.split("/");
-  if (!upstreamOwner || !upstreamRepoName) {
-    throw new Error("Invalid upstream repository format");
-  }
-  const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
-  if (!latestTag) {
-    import_core.info("No valid tags found in upstream repository");
-    return;
-  }
-  import_core.info(`Latest upstream tag: ${latestTag}`);
-  const [targetOwner, targetRepoName] = targetRepo.split("/");
-  if (!targetOwner || !targetRepoName) {
-    throw new Error("Invalid target repository format");
-  }
-  const labelName = `sync/upstream-${latestTag}`;
-  const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
-    q: `repo:${targetOwner}/${targetRepoName} is:pr label:"${labelName}"`,
-    per_page: 1
-  });
-  if (searchResults.total_count > 0) {
-    import_core.info(`PR for tag ${latestTag} already exists or was previously processed`);
-    return;
-  }
-  await import_exec.exec("git", ["config", "--global", "user.name", "github-actions[bot]"]);
-  await import_exec.exec("git", ["config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"]);
-  await import_exec.exec("git", ["remote", "add", "upstream", `https://github.com/${upstreamRepo}.git`]);
-  await import_exec.exec("git", ["fetch", "upstream", "--tags"]);
-  const branchName = `sync/upstream-${latestTag}`;
-  await import_exec.exec("git", ["checkout", "-b", branchName]);
-  let hasConflicts = false;
-  let mergeMessage = "";
   try {
-    await import_exec.exec("git", ["merge", latestTag]);
-    mergeMessage = "Successfully merged upstream tag";
-    import_core.info(mergeMessage);
+    const targetRepo = import_core.getInput("target-repo", { required: true });
+    const upstreamRepo = import_core.getInput("upstream-repo", { required: true });
+    const token = import_core.getInput("github-token", { required: true });
+    const octokit = import_github.getOctokit(token);
+    const [upstreamOwner, upstreamRepoName] = upstreamRepo.split("/");
+    const [targetOwner, targetRepoName] = targetRepo.split("/");
+    if (!upstreamOwner || !upstreamRepoName || !targetOwner || !targetRepoName) {
+      throw new Error("Invalid repository format");
+    }
+    const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
+    if (!latestTag) {
+      import_core.info("No valid tags found in upstream repository");
+      return;
+    }
+    const syncLabel = `sync/upstream-${latestTag}`;
+    const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
+    if (syncExists) {
+      import_core.info(`Sync for tag ${latestTag} already exists or was previously processed`);
+      return;
+    }
+    const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
+    await import_exec.exec("git", ["config", "--global", "user.name", "github-actions[bot]"]);
+    await import_exec.exec("git", ["config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"]);
+    await import_exec.exec("git", ["remote", "add", "upstream", `https://github.com/${upstreamRepo}.git`]);
+    await import_exec.exec("git", ["fetch", "upstream", `refs/tags/${latestTag}:refs/tags/${latestTag}`, "--no-tags"]);
+    const branchName = `sync/upstream-${latestTag}`;
+    await import_exec.exec("git", ["checkout", "-b", branchName, latestTag]);
+    await import_exec.exec("git", [
+      "push",
+      `https://x-access-token:${token}@github.com/${targetRepo}.git`,
+      branchName,
+      "--force"
+    ]);
+    const branchUrl = `https://github.com/${targetRepo}/tree/${branchName}`;
+    const initialIssueBody = `A sync branch has been created with ${upstreamRepo} tag ${latestTag}.
+
+## Branch Details
+- Branch name: \`${branchName}\`
+- Base branch: \`${defaultBranch}\`
+- Upstream tag: ${latestTag}
+
+## Next Steps
+1. [View the branch](${branchUrl})
+2. Create a pull request (link will be updated)
+
+You can create a pull request to see any potential conflicts.`;
+    const issueNumber = await createSyncIssue(octokit, targetOwner, targetRepoName, `[Action] Sync branch created for ${latestTag}`, initialIssueBody, syncLabel);
+    const prTitle = encodeURIComponent(`Sync: Update to upstream ${latestTag}`);
+    const prBody = encodeURIComponent(`Syncs with upstream tag ${latestTag}
+
+Closes #${issueNumber}`);
+    const createPrUrl = `https://github.com/${targetRepo}/compare/${defaultBranch}...${branchName}?quick_pull=1&title=${prTitle}&body=${prBody}`;
+    const finalIssueBody = `A sync branch has been created with ${upstreamRepo} tag ${latestTag}.
+
+## Branch Details
+- Branch name: \`${branchName}\`
+- Base branch: \`${defaultBranch}\`
+- Upstream tag: ${latestTag}
+
+## Next Steps
+1. [View the branch](${branchUrl})
+2. [Create a pull request](${createPrUrl})
+
+You can create a pull request using the link above to see any potential conflicts.`;
+    await updateIssue(octokit, targetOwner, targetRepoName, issueNumber, finalIssueBody);
+    import_core.info(`Created issue #${issueNumber} and prepared PR URL with auto-close functionality`);
   } catch (error) {
-    hasConflicts = true;
-    mergeMessage = "Merge conflicts detected. Manual resolution required.";
-    import_core.warning(mergeMessage);
-    await import_exec.exec("git", ["add", "."]);
-    await import_exec.exec("git", ["commit", "--no-verify", "-m", "WIP: Sync with upstream (conflicts to resolve)"]);
+    import_core.setFailed(error instanceof Error ? error.message : "An unknown error occurred");
   }
-  await import_exec.exec("git", [
-    "push",
-    `https://x-access-token:${token}@github.com/${targetRepo}.git`,
-    branchName,
-    "--force-with-lease"
-  ]);
-  const { data: repo } = await octokit.rest.repos.get({
-    owner: targetOwner,
-    repo: targetRepoName
-  });
-  const defaultBranch = repo.default_branch;
-  const commonHeader = `This PR ${hasConflicts ? "attempts to" : ""} sync your fork with the upstream repository's tag ${latestTag}.`;
-  const commonChanges = `## Changes included:
-- ${hasConflicts ? "Attempted merge" : "Successfully merged"} with tag ${latestTag}
-- Updates from: https://github.com/${upstreamRepo}`;
-  const commonFooter = `You can safely delete the \`${branchName}\` branch afterward.`;
-  const conflictInstructions = `## ⚠️ Merge Conflicts Detected
-This PR contains merge conflicts that need to be resolved manually. Please:
-1. Checkout this branch locally
-2. Resolve the conflicts
-3. Push the resolved changes back to this branch
-
-### Next Steps:
-1. Resolve conflicts between your customizations and upstream changes
-2. Once conflicts are resolved:
-   - If you want to sync to this tag: merge the PR
-   - If you don't want to sync: close the PR
-3. ${commonFooter}`;
-  const normalInstructions = `Please review the changes and:
-- If you want to sync to this tag: merge the PR
-- If you don't want to sync: close the PR
-
-${commonFooter}`;
-  const prBody = `${commonHeader}
-
-${hasConflicts ? conflictInstructions : normalInstructions}
-
-${commonChanges}`;
-  const { data: pr } = await octokit.rest.pulls.create({
-    owner: targetOwner,
-    repo: targetRepoName,
-    title: hasConflicts ? `[Conflicts] Sync with upstream tag ${latestTag}` : `Sync with upstream tag ${latestTag}`,
-    head: branchName,
-    base: defaultBranch,
-    body: prBody
-  });
-  const labels = [labelName];
-  if (hasConflicts) {
-    labels.push("merge-conflicts");
-  }
-  await octokit.rest.issues.addLabels({
-    owner: targetOwner,
-    repo: targetRepoName,
-    issue_number: pr.number,
-    labels
-  });
-  import_core.info(`Created PR #${pr.number}${hasConflicts ? " with merge conflicts" : ""}`);
 }
-try {
-  await run();
-} catch (err) {
-  import_core.setFailed(err instanceof Error ? err.message : "An unknown error occurred");
-}
+run();

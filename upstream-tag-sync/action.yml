@@ -11,12 +11,7 @@ inputs:
     description: 'Upstream repository to sync from (format: owner/repo)'
     required: true
   github-token:
-    description: |
-      GitHub token for authentication. Can be provided as:
-      - GitHub Actions token (${{ secrets.GITHUB_TOKEN }}) for same-repository operations
-      - GitHub App installation token (recommended for cross-repository usage)
-      - Personal Access Token (PAT) stored as a secret
-      Cannot be defaulted in the action due to security scoping - tokens are only valid in the context of the calling workflow.
+    description: 'GitHub token for authentication. Read more at https://docs.github.com/en/actions/reference/authentication-in-a-workflow'
     required: true
 runs:
   using: 'node20'
