@@ -24488,10 +24488,10 @@ async function retryWithBackoff(operation, maxAttempts = 5, baseDelay = 1000) {
   }
   throw new Error("Should not reach here due to throw in loop");
 }
-async function getLatestTag(octokit, owner, repo) {
+async function getLatestTag(octokit, owner, repo, attempt = 1, maxAttempts = 5, baseDelay = 1000) {
   import_core.info(`Fetching tags for ${owner}/${repo}`);
-  const tags = [];
   try {
+    const tags = [];
     const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
       owner,
       repo,
@@ -24502,25 +24502,31 @@ async function getLatestTag(octokit, owner, repo) {
       import_core.info(`Fetched ${tags.length} tags so far...`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-  } catch (error) {
-    import_core.info("Error fetching tags, retrying with backoff...");
-    return await retryWithBackoff(() => getLatestTag(octokit, owner, repo));
+    if (tags.length === 0) {
+      import_core.info("No tags found in repository");
+      return null;
+    }
+    const validTags = tags.map((tag) => ({
+      name: tag.name,
+      version: import_semver.default.valid(import_semver.default.clean(tag.name))
+    })).filter((tag) => tag.version !== null).sort((a, b) => import_semver.default.rcompare(a.version, b.version));
+    if (validTags.length === 0) {
+      import_core.info("No semver-compliant tags found in repository");
+      return null;
+    }
+    const latestTag = validTags[0];
+    import_core.info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
+    return latestTag.name;
+  } catch (err) {
+    const error = err;
+    if (attempt >= maxAttempts) {
+      throw new Error(`Failed to fetch tags after ${maxAttempts} attempts: ${error.message}`);
+    }
+    const delay = Math.min(baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000, 60000);
+    import_core.info(`Error fetching tags (attempt ${attempt}/${maxAttempts}), waiting ${Math.round(delay / 1000)}s before retry...`);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    return getLatestTag(octokit, owner, repo, attempt + 1, maxAttempts, baseDelay);
   }
-  if (tags.length === 0) {
-    import_core.info("No tags found in repository");
-    return null;
-  }
-  const validTags = tags.map((tag) => ({
-    name: tag.name,
-    version: import_semver.default.valid(import_semver.default.clean(tag.name))
-  })).filter((tag) => tag.version !== null).sort((a, b) => import_semver.default.rcompare(a.version, b.version));
-  if (validTags.length === 0) {
-    import_core.info("No semver-compliant tags found in repository");
-    return null;
-  }
-  const latestTag = validTags[0];
-  import_core.info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
-  return latestTag.name;
 }
 async function createSyncIssue(octokit, owner, repo, title, body, syncLabel) {
   return retryWithBackoff(async () => {
