@@ -24597,7 +24597,7 @@ async function run() {
     await import_exec.exec("git", ["checkout", "-b", branchName, latestTag]);
     await import_exec.exec("git", [
       "push",
-      `https://x-access-token:${token}@github.com/${targetRepo}.git`,
+      "origin",
       branchName,
       "--force"
     ]);
