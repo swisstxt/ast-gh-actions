@@ -278,7 +278,7 @@ async function run(): Promise<void> {
         await exec('git', ['checkout', '-b', branchName, latestTag]);
         await exec('git', [
             'push',
-            `https://x-access-token:${token}@github.com/${targetRepo}.git`,
+            `https://ast-service-account:${token}@github.com/${targetRepo}.git`,
             branchName,
             '--force'
         ]);
