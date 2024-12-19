@@ -24554,7 +24554,7 @@ async function getDefaultBranch(octokit, owner, repo) {
 async function checkExistingSync(octokit, owner, repo, syncLabel) {
   return retryWithBackoff(async () => {
     const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
-      q: `repo:${owner}/${repo} label:"${syncLabel}" is:open is:issue,is:pull-request`,
+      q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:open+is:issue`,
       per_page: 1
     });
     return searchResults.total_count > 0;
