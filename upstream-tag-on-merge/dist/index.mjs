@@ -22762,27 +22762,27 @@ async function createAndPushTag(octokit, owner, repo, tagName, sha, message) {
   });
 }
 async function run() {
-  try {
-    if (!import_github.context.payload.pull_request?.merged) {
-      import_core.info("This is not a merged PR. Skipping.");
-      return;
-    }
-    const token = import_core.getInput("github-token", { required: true });
-    const octokit = import_github.getOctokit(token);
-    const pr = import_github.context.payload.pull_request;
-    const branchName = pr.head.ref;
-    const tagName = extractTagFromBranch(branchName);
-    if (!tagName) {
-      import_core.info("This PR is not from a sync branch. Skipping.");
-      return;
-    }
-    const { owner, repo } = import_github.context.repo;
-    const message = `Tag created from sync PR #${pr.number}`;
-    import_core.info(`Creating tag ${tagName} at commit ${pr.merge_commit_sha}`);
-    await createAndPushTag(octokit, owner, repo, tagName, pr.merge_commit_sha, message);
-    import_core.info(`Successfully created tag ${tagName}`);
-  } catch (error) {
-    import_core.setFailed(error instanceof Error ? error.message : "An unknown error occurred");
+  if (!import_github.context.payload.pull_request?.merged) {
+    import_core.info("This is not a merged PR. Skipping.");
+    return;
   }
+  const token = import_core.getInput("github-token", { required: true });
+  const octokit = import_github.getOctokit(token);
+  const pr = import_github.context.payload.pull_request;
+  const branchName = pr.head.ref;
+  const tagName = extractTagFromBranch(branchName);
+  if (!tagName) {
+    import_core.info("This PR is not from a sync branch. Skipping.");
+    return;
+  }
+  const { owner, repo } = import_github.context.repo;
+  const message = `Tag created from sync PR #${pr.number}`;
+  import_core.info(`Creating tag ${tagName} at commit ${pr.merge_commit_sha}`);
+  await createAndPushTag(octokit, owner, repo, tagName, pr.merge_commit_sha, message);
+  import_core.info(`Successfully created tag ${tagName}`);
 }
-run();
+try {
+  await run();
+} catch (err) {
+  import_core.setFailed(err instanceof Error ? err.message : "An unknown error occurred");
+}
