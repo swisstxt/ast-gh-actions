@@ -246,7 +246,7 @@ async function run(): Promise<void> {
         }
 
         // Create branch name for the sync
-        const branchName = `sync/upstream-branch-${latestTag}`;
+        const branchName = `sync/upstream-${latestTag}`;
 
         // Get repository default branch
         const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);

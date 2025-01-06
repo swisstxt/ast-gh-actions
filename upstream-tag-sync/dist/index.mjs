@@ -24589,7 +24589,7 @@ async function run() {
       import_core.info(`PR for label ${syncLabel} already exists or was previously processed`);
       return;
     }
-    const branchName = `sync/upstream-branch-${latestTag}`;
+    const branchName = `sync/upstream-${latestTag}`;
     const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
     await import_exec.exec("git", ["config", "--global", "user.name", "github-actions[bot]"]);
     await import_exec.exec("git", ["config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"]);
