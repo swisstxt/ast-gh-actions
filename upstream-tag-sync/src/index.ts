@@ -59,13 +59,13 @@ async function getLatestTag(
     info(`Fetching tags for ${owner}/${repo}`);
 
     try {
-        const tags: Array<{ name: string }> = [];
         const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
             owner,
             repo,
-            per_page: 100
+            per_page: 100,
         });
 
+        const tags: Array<{ name: string }> = [];
         for await (const { data: pageTags } of iterator) {
             tags.push(...pageTags);
             info(`Fetched ${tags.length} tags so far...`);
@@ -214,13 +214,16 @@ async function createPullRequest(
  * @returns {Promise<void>} A promise that resolves when the sync is complete
  */
 async function run(): Promise<void> {
+    // Get inputs
     const targetRepo = getInput('target-repo', { required: true });
     const upstreamRepo = getInput('upstream-repo', { required: true });
     const token = getInput('github-token', { required: true });
 
+    // Create octokit instance
     const octokit = getOctokit(token);
 
-    // Parse repository information
+    info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
+
     const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
     const [targetOwner, targetRepoName] = targetRepo.split('/');
 
@@ -228,12 +231,13 @@ async function run(): Promise<void> {
         throw new Error('Invalid repository format');
     }
 
-    // Get latest upstream tag with retries
+    // Get latest upstream tag
     const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
     if (!latestTag) {
         info('No valid tags found in upstream repository');
         return;
     }
+    info(`Latest upstream tag: ${latestTag}`);
 
     const syncLabel = `sync/upstream-${latestTag}`;
 

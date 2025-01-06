@@ -24491,12 +24491,12 @@ async function retryWithBackoff(operation, maxAttempts = 5, baseDelay = 1000) {
 async function getLatestTag(octokit, owner, repo, attempt = 1, maxAttempts = 5, baseDelay = 1000) {
   import_core.info(`Fetching tags for ${owner}/${repo}`);
   try {
-    const tags = [];
     const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
       owner,
       repo,
       per_page: 100
     });
+    const tags = [];
     for await (const { data: pageTags } of iterator) {
       tags.push(...pageTags);
       import_core.info(`Fetched ${tags.length} tags so far...`);
@@ -24572,6 +24572,7 @@ async function run() {
   const upstreamRepo = import_core.getInput("upstream-repo", { required: true });
   const token = import_core.getInput("github-token", { required: true });
   const octokit = import_github.getOctokit(token);
+  import_core.info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
   const [upstreamOwner, upstreamRepoName] = upstreamRepo.split("/");
   const [targetOwner, targetRepoName] = targetRepo.split("/");
   if (!upstreamOwner || !upstreamRepoName || !targetOwner || !targetRepoName) {
@@ -24582,6 +24583,7 @@ async function run() {
     import_core.info("No valid tags found in upstream repository");
     return;
   }
+  import_core.info(`Latest upstream tag: ${latestTag}`);
   const syncLabel = `sync/upstream-${latestTag}`;
   const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
   if (syncExists) {
