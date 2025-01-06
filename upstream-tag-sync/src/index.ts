@@ -1,4 +1,4 @@
-import { getInput, info, setFailed } from '@actions/core';
+import { getInput, info, warning, setFailed } from '@actions/core';
 import { getOctokit } from '@actions/github';
 import { exec } from '@actions/exec';
 import semver from 'semver';
@@ -88,7 +88,7 @@ async function getLatestTag(
             .sort((a, b) => semver.rcompare(a.version, b.version));
 
         if (validTags.length === 0) {
-            info('No semver-compliant tags found in repository');
+            warning('No semver-compliant tags found in repository');
             return null;
         }
 
@@ -214,58 +214,57 @@ async function createPullRequest(
  * @returns {Promise<void>} A promise that resolves when the sync is complete
  */
 async function run(): Promise<void> {
-    try {
-        const targetRepo = getInput('target-repo', { required: true });
-        const upstreamRepo = getInput('upstream-repo', { required: true });
-        const token = getInput('github-token', { required: true });
+    const targetRepo = getInput('target-repo', { required: true });
+    const upstreamRepo = getInput('upstream-repo', { required: true });
+    const token = getInput('github-token', { required: true });
 
-        const octokit = getOctokit(token);
+    const octokit = getOctokit(token);
 
-        // Parse repository information
-        const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
-        const [targetOwner, targetRepoName] = targetRepo.split('/');
+    // Parse repository information
+    const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
+    const [targetOwner, targetRepoName] = targetRepo.split('/');
 
-        if (!upstreamOwner || !upstreamRepoName || !targetOwner || !targetRepoName) {
-            throw new Error('Invalid repository format');
-        }
+    if (!upstreamOwner || !upstreamRepoName || !targetOwner || !targetRepoName) {
+        throw new Error('Invalid repository format');
+    }
 
-        // Get latest upstream tag with retries
-        const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
-        if (!latestTag) {
-            info('No valid tags found in upstream repository');
-            return;
-        }
+    // Get latest upstream tag with retries
+    const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
+    if (!latestTag) {
+        info('No valid tags found in upstream repository');
+        return;
+    }
 
-        const syncLabel = `sync/upstream-${latestTag}`;
+    const syncLabel = `sync/upstream-${latestTag}`;
 
-        // Check for existing PR with the sync label
-        const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
-        if (syncExists) {
-            info(`PR for label ${syncLabel} already exists or was previously processed`);
-            return;
-        }
+    // Check for existing PR with the sync label
+    const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
+    if (syncExists) {
+        info(`PR for label ${syncLabel} already exists or was previously processed`);
+        return;
+    }
 
-        // Create branch name for the sync
-        const branchName = `sync/upstream-${latestTag}`;
+    // Create branch name for the sync
+    const branchName = `sync/upstream-${latestTag}`;
 
-        // Get repository default branch
-        const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
+    // Get repository default branch
+    const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
 
-        // Set up git configuration
-        await exec('git', ['config', '--global', 'user.name', 'github-actions[bot]']);
-        await exec('git', ['config', '--global', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
+    // Set up git configuration
+    await exec('git', ['config', '--global', 'user.name', 'github-actions[bot]']);
+    await exec('git', ['config', '--global', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
 
-        // Add upstream remote and fetch the specific tag
-        await exec('git', ['remote', 'add', 'upstream', `https://github.com/${upstreamRepo}.git`]);
-        await exec('git', ['fetch', 'upstream', `refs/tags/${latestTag}:refs/tags/${latestTag}`, '--no-tags']);
+    // Add upstream remote and fetch the specific tag
+    await exec('git', ['remote', 'add', 'upstream', `https://github.com/${upstreamRepo}.git`]);
+    await exec('git', ['fetch', 'upstream', `refs/tags/${latestTag}:refs/tags/${latestTag}`, '--no-tags']);
 
-        // Create and push the branch
-        await exec('git', ['checkout', '-b', branchName, latestTag]);
-        await exec('git', ['push', 'origin', branchName, '--force']);
+    // Create and push the branch
+    await exec('git', ['checkout', '-b', branchName, latestTag]);
+    await exec('git', ['push', 'origin', branchName, '--force']);
 
-        // Create pull request
-        const prTitle = `Sync: Update to upstream ${latestTag}`;
-        const prBody = `This PR syncs with upstream tag ${latestTag}.
+    // Create pull request
+    const prTitle = `Sync: Update to upstream ${latestTag}`;
+    const prBody = `This PR syncs with upstream tag ${latestTag}.
 
 ## Details
 - Source: ${upstreamRepo}@${latestTag}
@@ -274,22 +273,22 @@ async function run(): Promise<void> {
 
 This PR was automatically created by the sync action.`;
 
-        const prNumber = await createPullRequest(
-            octokit,
-            targetOwner,
-            targetRepoName,
-            prTitle,
-            prBody,
-            branchName,
-            defaultBranch,
-            ['sync', syncLabel]
-        );
+    const prNumber = await createPullRequest(
+        octokit,
+        targetOwner,
+        targetRepoName,
+        prTitle,
+        prBody,
+        branchName,
+        defaultBranch,
+        ['sync', syncLabel]
+    );
 
-        info(`Created PR #${prNumber} to sync with ${latestTag}`);
-
-    } catch (error) {
-        setFailed(error instanceof Error ? error.message : 'An unknown error occurred');
-    }
+    info(`Created PR #${prNumber} to sync with ${latestTag}`);
 }
 
-run();
+try {
+    await run();
+} catch (err: unknown) {
+    setFailed(err instanceof Error ? err.message : 'An unknown error occurred');
+}

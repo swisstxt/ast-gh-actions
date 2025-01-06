@@ -24511,7 +24511,7 @@ async function getLatestTag(octokit, owner, repo, attempt = 1, maxAttempts = 5, 
       version: import_semver.default.valid(import_semver.default.clean(tag.name))
     })).filter((tag) => tag.version !== null).sort((a, b) => import_semver.default.rcompare(a.version, b.version));
     if (validTags.length === 0) {
-      import_core.info("No semver-compliant tags found in repository");
+      import_core.warning("No semver-compliant tags found in repository");
       return null;
     }
     const latestTag = validTags[0];
@@ -24568,37 +24568,36 @@ async function createPullRequest(octokit, owner, repo, title, body, head, base, 
   });
 }
 async function run() {
-  try {
-    const targetRepo = import_core.getInput("target-repo", { required: true });
-    const upstreamRepo = import_core.getInput("upstream-repo", { required: true });
-    const token = import_core.getInput("github-token", { required: true });
-    const octokit = import_github.getOctokit(token);
-    const [upstreamOwner, upstreamRepoName] = upstreamRepo.split("/");
-    const [targetOwner, targetRepoName] = targetRepo.split("/");
-    if (!upstreamOwner || !upstreamRepoName || !targetOwner || !targetRepoName) {
-      throw new Error("Invalid repository format");
-    }
-    const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
-    if (!latestTag) {
-      import_core.info("No valid tags found in upstream repository");
-      return;
-    }
-    const syncLabel = `sync/upstream-${latestTag}`;
-    const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
-    if (syncExists) {
-      import_core.info(`PR for label ${syncLabel} already exists or was previously processed`);
-      return;
-    }
-    const branchName = `sync/upstream-${latestTag}`;
-    const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
-    await import_exec.exec("git", ["config", "--global", "user.name", "github-actions[bot]"]);
-    await import_exec.exec("git", ["config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"]);
-    await import_exec.exec("git", ["remote", "add", "upstream", `https://github.com/${upstreamRepo}.git`]);
-    await import_exec.exec("git", ["fetch", "upstream", `refs/tags/${latestTag}:refs/tags/${latestTag}`, "--no-tags"]);
-    await import_exec.exec("git", ["checkout", "-b", branchName, latestTag]);
-    await import_exec.exec("git", ["push", "origin", branchName, "--force"]);
-    const prTitle = `Sync: Update to upstream ${latestTag}`;
-    const prBody = `This PR syncs with upstream tag ${latestTag}.
+  const targetRepo = import_core.getInput("target-repo", { required: true });
+  const upstreamRepo = import_core.getInput("upstream-repo", { required: true });
+  const token = import_core.getInput("github-token", { required: true });
+  const octokit = import_github.getOctokit(token);
+  const [upstreamOwner, upstreamRepoName] = upstreamRepo.split("/");
+  const [targetOwner, targetRepoName] = targetRepo.split("/");
+  if (!upstreamOwner || !upstreamRepoName || !targetOwner || !targetRepoName) {
+    throw new Error("Invalid repository format");
+  }
+  const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
+  if (!latestTag) {
+    import_core.info("No valid tags found in upstream repository");
+    return;
+  }
+  const syncLabel = `sync/upstream-${latestTag}`;
+  const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
+  if (syncExists) {
+    import_core.info(`PR for label ${syncLabel} already exists or was previously processed`);
+    return;
+  }
+  const branchName = `sync/upstream-${latestTag}`;
+  const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
+  await import_exec.exec("git", ["config", "--global", "user.name", "github-actions[bot]"]);
+  await import_exec.exec("git", ["config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"]);
+  await import_exec.exec("git", ["remote", "add", "upstream", `https://github.com/${upstreamRepo}.git`]);
+  await import_exec.exec("git", ["fetch", "upstream", `refs/tags/${latestTag}:refs/tags/${latestTag}`, "--no-tags"]);
+  await import_exec.exec("git", ["checkout", "-b", branchName, latestTag]);
+  await import_exec.exec("git", ["push", "origin", branchName, "--force"]);
+  const prTitle = `Sync: Update to upstream ${latestTag}`;
+  const prBody = `This PR syncs with upstream tag ${latestTag}.
 
 ## Details
 - Source: ${upstreamRepo}@${latestTag}
@@ -24606,10 +24605,11 @@ async function run() {
 - Sync Branch: \`${branchName}\`
 
 This PR was automatically created by the sync action.`;
-    const prNumber = await createPullRequest(octokit, targetOwner, targetRepoName, prTitle, prBody, branchName, defaultBranch, ["sync", syncLabel]);
-    import_core.info(`Created PR #${prNumber} to sync with ${latestTag}`);
-  } catch (error) {
-    import_core.setFailed(error instanceof Error ? error.message : "An unknown error occurred");
-  }
+  const prNumber = await createPullRequest(octokit, targetOwner, targetRepoName, prTitle, prBody, branchName, defaultBranch, ["sync", syncLabel]);
+  import_core.info(`Created PR #${prNumber} to sync with ${latestTag}`);
 }
-run();
+try {
+  await run();
+} catch (err) {
+  import_core.setFailed(err instanceof Error ? err.message : "An unknown error occurred");
+}
