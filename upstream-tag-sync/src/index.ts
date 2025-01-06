@@ -112,65 +112,6 @@ async function getLatestTag(
 }
 
 /**
- * Creates an issue in the target repository to track the sync operation
- * Handles rate limiting with exponential backoff
- *
- * @param {OctokitClient} octokit - The authenticated GitHub client
- * @param {string} owner - The owner of the repository
- * @param {string} repo - The name of the repository
- * @param {string} title - The title of the issue
- * @param {string} body - The body content of the issue
- * @returns {Promise<number>} The number of the created issue
- */
-async function createSyncIssue(
-    octokit: OctokitClient,
-    owner: string,
-    repo: string,
-    title: string,
-    body: string,
-    syncLabel: string
-): Promise<number> {
-    return retryWithBackoff(async () => {
-        const { data: issue } = await octokit.rest.issues.create({
-            owner,
-            repo,
-            title,
-            body,
-            labels: ['sync', syncLabel]
-        });
-        return issue.number;
-    });
-}
-
-/**
- * Updates an existing issue with new content
- * Handles rate limiting with exponential backoff
- *
- * @param {OctokitClient} octokit - The authenticated GitHub client
- * @param {string} owner - The owner of the repository
- * @param {string} repo - The name of the repository
- * @param {number} issueNumber - The issue number to update
- * @param {string} body - The new body content for the issue
- * @returns {Promise<void>}
- */
-async function updateIssue(
-    octokit: OctokitClient,
-    owner: string,
-    repo: string,
-    issueNumber: number,
-    body: string
-): Promise<void> {
-    await retryWithBackoff(() =>
-        octokit.rest.issues.update({
-            owner,
-            repo,
-            issue_number: issueNumber,
-            body
-        })
-    );
-}
-
-/**
  * Gets the default branch for a repository
  * Handles rate limiting with exponential backoff
  *
@@ -194,7 +135,7 @@ async function getDefaultBranch(
 }
 
 /**
- * Checks if there's already a sync issue/PR for the given tag
+ * Checks if there's already a sync PR for the given tag
  *
  * @param {OctokitClient} octokit - The authenticated GitHub client
  * @param {string} owner - The owner of the repository
@@ -210,10 +151,56 @@ async function checkExistingSync(
 ): Promise<boolean> {
     return retryWithBackoff(async () => {
         const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
-            q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:open+is:issue`,
+            q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:pr`,
             per_page: 1
         });
         return searchResults.total_count > 0;
+    });
+}
+
+/**
+ * Creates a pull request in the target repository
+ *
+ * @param {OctokitClient} octokit - The authenticated GitHub client
+ * @param {string} owner - The owner of the repository
+ * @param {string} repo - The name of the repository
+ * @param {string} title - The title of the pull request
+ * @param {string} body - The body of the pull request
+ * @param {string} head - The branch to merge from
+ * @param {string} base - The branch to merge into
+ * @param {string[]} labels - The labels to add to the pull request
+ * @returns {Promise<number>} The number of the created pull request
+ */
+async function createPullRequest(
+    octokit: OctokitClient,
+    owner: string,
+    repo: string,
+    title: string,
+    body: string,
+    head: string,
+    base: string,
+    labels: string[]
+): Promise<number> {
+    return retryWithBackoff(async () => {
+        const { data: pr } = await octokit.rest.pulls.create({
+            owner,
+            repo,
+            title,
+            body,
+            head,
+            base,
+        });
+
+        if (labels.length > 0) {
+            await octokit.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pr.number,
+                labels
+            });
+        }
+
+        return pr.number;
     });
 }
 
@@ -222,14 +209,9 @@ async function checkExistingSync(
  * This function:
  * 1. Fetches the latest tag from the upstream repository
  * 2. Creates a new branch from that tag
- * 3. Creates an issue with instructions for creating a PR
+ * 3. Creates a pull request to merge the changes
  *
- * Required action inputs:
- * - target-repo: The repository to sync (format: owner/repo)
- * - upstream-repo: The repository to sync from (format: owner/repo)
- * - github-token: GitHub token with necessary permissions
- *
- * @returns {Promise<void>}
+ * @returns {Promise<void>} A promise that resolves when the sync is complete
  */
 async function run(): Promise<void> {
     try {
@@ -254,15 +236,19 @@ async function run(): Promise<void> {
             return;
         }
 
-        // Check for existing sync with this tag
         const syncLabel = `sync/upstream-${latestTag}`;
+
+        // Check for existing PR with the sync label
         const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
         if (syncExists) {
-            info(`Sync for tag ${latestTag} already exists or was previously processed`);
+            info(`PR for label ${syncLabel} already exists or was previously processed`);
             return;
         }
 
-        // Get repository default branch with retries
+        // Create branch name for the sync
+        const branchName = `sync/upstream-${latestTag}`;
+
+        // Get repository default branch
         const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
 
         // Set up git configuration
@@ -274,63 +260,32 @@ async function run(): Promise<void> {
         await exec('git', ['fetch', 'upstream', `refs/tags/${latestTag}:refs/tags/${latestTag}`, '--no-tags']);
 
         // Create and push the branch
-        const branchName = `sync/upstream-${latestTag}`;
         await exec('git', ['checkout', '-b', branchName, latestTag]);
-        await exec('git', [
-            'push',
-            'origin',
-            branchName,
-            '--force'
-        ]);
+        await exec('git', ['push', 'origin', branchName, '--force']);
 
-        // First create issue without the PR URL
-        const branchUrl = `https://github.com/${targetRepo}/tree/${branchName}`;
-        const initialIssueBody = `A sync branch has been created with ${upstreamRepo} tag ${latestTag}.
+        // Create pull request
+        const prTitle = `Sync: Update to upstream ${latestTag}`;
+        const prBody = `This PR syncs with upstream tag ${latestTag}.
 
-## Branch Details
-- Branch name: \`${branchName}\`
-- Base branch: \`${defaultBranch}\`
-- Upstream tag: ${latestTag}
+## Details
+- Source: ${upstreamRepo}@${latestTag}
+- Target Branch: \`${defaultBranch}\`
+- Sync Branch: \`${branchName}\`
 
-## Next Steps
-1. [View the branch](${branchUrl})
-2. Create a pull request (link will be updated)
+This PR was automatically created by the sync action.`;
 
-You can create a pull request to see any potential conflicts.`;
-
-        // Create the issue with retries
-        const issueNumber = await createSyncIssue(
+        const prNumber = await createPullRequest(
             octokit,
             targetOwner,
             targetRepoName,
-            `[Action] Sync branch created for ${latestTag}`,
-            initialIssueBody,
-            syncLabel
+            prTitle,
+            prBody,
+            branchName,
+            defaultBranch,
+            ['sync', syncLabel]
         );
 
-        // Now create the PR URL with the issue number
-        const prTitle = encodeURIComponent(`Sync: Update to upstream ${latestTag}`);
-        const prBody = encodeURIComponent(`Syncs with upstream tag ${latestTag}\n\nCloses #${issueNumber}`);
-        const createPrUrl = `https://github.com/${targetRepo}/compare/${defaultBranch}...${branchName}?quick_pull=1&title=${prTitle}&body=${prBody}`;
-
-        // Update the issue with the PR URL
-        const finalIssueBody = `A sync branch has been created with ${upstreamRepo} tag ${latestTag}.
-
-## Branch Details
-- Branch name: \`${branchName}\`
-- Base branch: \`${defaultBranch}\`
-- Upstream tag: ${latestTag}
-
-## Next Steps
-1. [View the branch](${branchUrl})
-2. [Create a pull request](${createPrUrl})
-
-You can create a pull request using the link above to see any potential conflicts.`;
-
-        // Update the issue with retries
-        await updateIssue(octokit, targetOwner, targetRepoName, issueNumber, finalIssueBody);
-
-        info(`Created issue #${issueNumber} and prepared PR URL with auto-close functionality`);
+        info(`Created PR #${prNumber} to sync with ${latestTag}`);
 
     } catch (error) {
         setFailed(error instanceof Error ? error.message : 'An unknown error occurred');

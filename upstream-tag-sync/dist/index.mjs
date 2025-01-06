@@ -24528,26 +24528,6 @@ async function getLatestTag(octokit, owner, repo, attempt = 1, maxAttempts = 5, 
     return getLatestTag(octokit, owner, repo, attempt + 1, maxAttempts, baseDelay);
   }
 }
-async function createSyncIssue(octokit, owner, repo, title, body, syncLabel) {
-  return retryWithBackoff(async () => {
-    const { data: issue } = await octokit.rest.issues.create({
-      owner,
-      repo,
-      title,
-      body,
-      labels: ["sync", syncLabel]
-    });
-    return issue.number;
-  });
-}
-async function updateIssue(octokit, owner, repo, issueNumber, body) {
-  await retryWithBackoff(() => octokit.rest.issues.update({
-    owner,
-    repo,
-    issue_number: issueNumber,
-    body
-  }));
-}
 async function getDefaultBranch(octokit, owner, repo) {
   return retryWithBackoff(async () => {
     const { data: repository } = await octokit.rest.repos.get({
@@ -24560,10 +24540,31 @@ async function getDefaultBranch(octokit, owner, repo) {
 async function checkExistingSync(octokit, owner, repo, syncLabel) {
   return retryWithBackoff(async () => {
     const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
-      q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:open+is:issue`,
+      q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:pr`,
       per_page: 1
     });
     return searchResults.total_count > 0;
+  });
+}
+async function createPullRequest(octokit, owner, repo, title, body, head, base, labels) {
+  return retryWithBackoff(async () => {
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo,
+      title,
+      body,
+      head,
+      base
+    });
+    if (labels.length > 0) {
+      await octokit.rest.issues.addLabels({
+        owner,
+        repo,
+        issue_number: pr.number,
+        labels
+      });
+    }
+    return pr.number;
   });
 }
 async function run() {
@@ -24585,55 +24586,28 @@ async function run() {
     const syncLabel = `sync/upstream-${latestTag}`;
     const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
     if (syncExists) {
-      import_core.info(`Sync for tag ${latestTag} already exists or was previously processed`);
+      import_core.info(`PR for label ${syncLabel} already exists or was previously processed`);
       return;
     }
+    const branchName = `sync/upstream-${latestTag}`;
     const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
     await import_exec.exec("git", ["config", "--global", "user.name", "github-actions[bot]"]);
     await import_exec.exec("git", ["config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"]);
     await import_exec.exec("git", ["remote", "add", "upstream", `https://github.com/${upstreamRepo}.git`]);
     await import_exec.exec("git", ["fetch", "upstream", `refs/tags/${latestTag}:refs/tags/${latestTag}`, "--no-tags"]);
-    const branchName = `sync/upstream-${latestTag}`;
     await import_exec.exec("git", ["checkout", "-b", branchName, latestTag]);
-    await import_exec.exec("git", [
-      "push",
-      "origin",
-      branchName,
-      "--force"
-    ]);
-    const branchUrl = `https://github.com/${targetRepo}/tree/${branchName}`;
-    const initialIssueBody = `A sync branch has been created with ${upstreamRepo} tag ${latestTag}.
+    await import_exec.exec("git", ["push", "origin", branchName, "--force"]);
+    const prTitle = `Sync: Update to upstream ${latestTag}`;
+    const prBody = `This PR syncs with upstream tag ${latestTag}.
 
-## Branch Details
-- Branch name: \`${branchName}\`
-- Base branch: \`${defaultBranch}\`
-- Upstream tag: ${latestTag}
+## Details
+- Source: ${upstreamRepo}@${latestTag}
+- Target Branch: \`${defaultBranch}\`
+- Sync Branch: \`${branchName}\`
 
-## Next Steps
-1. [View the branch](${branchUrl})
-2. Create a pull request (link will be updated)
-
-You can create a pull request to see any potential conflicts.`;
-    const issueNumber = await createSyncIssue(octokit, targetOwner, targetRepoName, `[Action] Sync branch created for ${latestTag}`, initialIssueBody, syncLabel);
-    const prTitle = encodeURIComponent(`Sync: Update to upstream ${latestTag}`);
-    const prBody = encodeURIComponent(`Syncs with upstream tag ${latestTag}
-
-Closes #${issueNumber}`);
-    const createPrUrl = `https://github.com/${targetRepo}/compare/${defaultBranch}...${branchName}?quick_pull=1&title=${prTitle}&body=${prBody}`;
-    const finalIssueBody = `A sync branch has been created with ${upstreamRepo} tag ${latestTag}.
-
-## Branch Details
-- Branch name: \`${branchName}\`
-- Base branch: \`${defaultBranch}\`
-- Upstream tag: ${latestTag}
-
-## Next Steps
-1. [View the branch](${branchUrl})
-2. [Create a pull request](${createPrUrl})
-
-You can create a pull request using the link above to see any potential conflicts.`;
-    await updateIssue(octokit, targetOwner, targetRepoName, issueNumber, finalIssueBody);
-    import_core.info(`Created issue #${issueNumber} and prepared PR URL with auto-close functionality`);
+This PR was automatically created by the sync action.`;
+    const prNumber = await createPullRequest(octokit, targetOwner, targetRepoName, prTitle, prBody, branchName, defaultBranch, ["sync", syncLabel]);
+    import_core.info(`Created PR #${prNumber} to sync with ${latestTag}`);
   } catch (error) {
     import_core.setFailed(error instanceof Error ? error.message : "An unknown error occurred");
   }
