@@ -22727,20 +22727,19 @@ async function retryWithBackoff(operation, maxAttempts = 5, baseDelay = 1000) {
     try {
       return await operation();
     } catch (err) {
-      const error = err;
-      const isRateLimit = error.message.includes("rate limit") || error.message.includes("secondary rate limit");
-      if (!isRateLimit || attempt === maxAttempts) {
-        throw error;
+      if (!(err instanceof Error) || !err.message.includes("rate limit") || attempt >= maxAttempts) {
+        throw err;
       }
       const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
-      import_core.info(`Rate limit hit, attempt ${attempt}/${maxAttempts}. Waiting ${Math.round(delay / 1000)}s...`);
+      const waitSeconds = Math.round(delay / 1000).toString();
+      import_core.info(`Rate limit hit, attempt ` + attempt.toString() + `/` + maxAttempts.toString() + `. Waiting ` + waitSeconds.toString() + ` s...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
   throw new Error("Should not reach here due to throw in loop");
 }
 function extractTagFromBranch(branchName) {
-  const match = branchName.match(/^sync\/upstream-(.+)$/);
+  const match = /^sync\/upstream-(.+)$/.exec(branchName);
   return match ? match[1] : null;
 }
 async function createAndPushTag(octokit, owner, repo, tagName, sha, message) {
@@ -22762,13 +22761,13 @@ async function createAndPushTag(octokit, owner, repo, tagName, sha, message) {
   });
 }
 async function run() {
-  if (!import_github.context.payload.pull_request?.merged) {
+  const pr = import_github.context.payload.pull_request;
+  if (!pr || !isPullRequest(pr) || !pr.merged) {
     import_core.info("This is not a merged PR. Skipping.");
     return;
   }
   const token = import_core.getInput("github-token", { required: true });
   const octokit = import_github.getOctokit(token);
-  const pr = import_github.context.payload.pull_request;
   const branchName = pr.head.ref;
   const tagName = extractTagFromBranch(branchName);
   if (!tagName) {
@@ -22776,13 +22775,25 @@ async function run() {
     return;
   }
   const { owner, repo } = import_github.context.repo;
-  const message = `Tag created from sync PR #${pr.number}`;
+  const prNumber = pr.number;
+  const message = `Tag created from sync PR ` + prNumber.toString();
+  if (!pr.merge_commit_sha) {
+    throw new Error("Merge commit SHA is undefined");
+  }
   import_core.info(`Creating tag ${tagName} at commit ${pr.merge_commit_sha}`);
   await createAndPushTag(octokit, owner, repo, tagName, pr.merge_commit_sha, message);
   import_core.info(`Successfully created tag ${tagName}`);
 }
+function isPullRequest(obj) {
+  return obj !== null && typeof obj === "object" && "merged" in obj && "head" in obj && "number" in obj && "merge_commit_sha" in obj;
+}
 try {
   await run();
 } catch (err) {
-  import_core.setFailed(err instanceof Error ? err.message : "An unknown error occurred");
+  if (err instanceof Error) {
+    import_core.setFailed(err.stack ? `${err.message}
+${err.stack}` : err.message);
+  } else {
+    import_core.setFailed("An unknown error occurred");
+  }
 }
