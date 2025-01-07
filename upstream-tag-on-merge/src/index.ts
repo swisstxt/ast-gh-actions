@@ -45,7 +45,7 @@ async function retryWithBackoff<T>(
  */
 function extractTagFromBranch(branchName: string): string | null {
     const match = branchName.match(/^sync\/upstream-(.+)$/);
-    return match ? match[1] : null;
+    return match?.[1];
 }
 
 /**
