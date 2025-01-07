@@ -16,7 +16,7 @@ on:
 jobs:
   tag:
     runs-on: ubuntu-latest
-    # Only run this job if the PR was merged (not just closed)
+    # Only run this job if the PR was merged (not just closed) and merged into default branch e.g. main / master
     if: github.event.pull_request.merged == true && github.event.pull_request.base.label == "${{ github.event.repo.owner }}:${{ github.event.repo.default_branch }}"
     steps:
       - uses: swisstxt/ast-gh-actions/upstream-tag-on-merge@main
