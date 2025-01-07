@@ -22,8 +22,7 @@ async function retryWithBackoff<T>(
             return await operation();
         } catch (err) {
             const error = err as Error;
-            const isRateLimit = error.message.includes('rate limit') ||
-                error.message.includes('secondary rate limit');
+            const isRateLimit = error.message.includes('rate limit');
 
             if (!isRateLimit || attempt === maxAttempts) {
                 throw error;
