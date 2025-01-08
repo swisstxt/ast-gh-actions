@@ -11,7 +11,7 @@ inputs:
     description: 'Upstream repository to sync from (format: owner/repo)'
     required: true
   github-token:
-    description: 'GitHub token for authentication. Read more at https://docs.github.com/en/actions/reference/authentication-in-a-workflow'
+    description: 'Classic token from a service account with "repo" scope. IMPORTANT: Do not use GITHUB_TOKEN or fine-grained tokens, as GITHUB_TOKEN cannot trigger workflows and fine-grained tokens require per-repo access configuration. See README.md for service account setup.'
     required: true
 runs:
   using: 'node20'
