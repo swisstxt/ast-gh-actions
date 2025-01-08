@@ -24480,8 +24480,8 @@ async function retryWithBackoff(operation, maxAttempts = 5, baseDelay = 1000) {
         throw err;
       }
       const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
-      const waitSeconds = Math.round(delay / 1000).toString();
-      import_core.info(`Rate limit hit, attempt ` + attempt.toString() + `/` + maxAttempts.toString() + `. Waiting ` + waitSeconds.toString() + ` s...`);
+      const waitSeconds = Math.round(delay / 1000);
+      import_core.info(`Rate limit hit, attempt ${attempt}/${maxAttempts}. Waiting ${waitSeconds}s...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
@@ -24498,7 +24498,7 @@ async function getLatestTag(octokit, owner, repo) {
     const tags = [];
     for await (const { data: pageTags } of iterator) {
       tags.push(...pageTags);
-      import_core.info(`Fetched ` + tags.length.toString() + ` tags so far...`);
+      import_core.info(`Fetched ${tags.length} tags so far...`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
     if (tags.length === 0) {
@@ -24598,7 +24598,7 @@ async function run() {
 
 This PR was automatically created by the sync action.`;
   const prNumber = await createPullRequest(octokit, targetOwner, targetRepoName, prTitle, prBody, branchName, defaultBranch, ["sync", syncLabel]);
-  import_core.info(`Created PR #` + prNumber.toString() + ` to sync with ${latestTag}`);
+  import_core.info(`Created PR #${prNumber} to sync with ${latestTag}`);
 }
 try {
   await run();

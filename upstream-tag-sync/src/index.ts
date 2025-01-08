@@ -32,15 +32,9 @@ async function retryWithBackoff<T>(
       }
 
       const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
-      const waitSeconds = Math.round(delay / 1000).toString();
+      const waitSeconds = Math.round(delay / 1000);
       info(
-        `Rate limit hit, attempt ` +
-        attempt.toString() +
-        `/` +
-        maxAttempts.toString() +
-        `. Waiting ` +
-        waitSeconds.toString() +
-        ` s...`,
+        `Rate limit hit, attempt ${attempt}/${maxAttempts}. Waiting ${waitSeconds}s...`,
       );
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
@@ -74,7 +68,7 @@ async function getLatestTag(
     const tags: { name: string }[] = [];
     for await (const { data: pageTags } of iterator) {
       tags.push(...pageTags);
-      info(`Fetched ` + tags.length.toString() + ` tags so far...`);
+      info(`Fetched ${tags.length} tags so far...`);
 
       // Add a small delay between pages to be nice to the API
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -283,7 +277,7 @@ This PR was automatically created by the sync action.`;
     ['sync', syncLabel]
   );
 
-  info(`Created PR #` + prNumber.toString() + ` to sync with ${latestTag}`);
+  info(`Created PR #${prNumber} to sync with ${latestTag}`);
 }
 
 try {

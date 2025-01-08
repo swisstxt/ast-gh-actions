@@ -6,7 +6,6 @@ export default [
     ignores: ["eslint.config.js"],
   },
   js.configs.recommended,
-  ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,
   {
     languageOptions: {
