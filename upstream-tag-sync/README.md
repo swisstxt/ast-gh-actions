@@ -14,15 +14,25 @@ on:
     - cron: '0 */12 * * *'  # Runs every 12 hours
   workflow_dispatch:  # Allows manual trigger
 
+permissions:
+  actions: write
+  contents: write     # using 'write' to allow pushing
+  issues: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1                                   # Only get latest commit
+          token: ${{ secrets.SERVICE_ACCOUNT_TOKEN }}      # Token to push back to fork
       - uses: swisstxt/ast-gh-actions/upstream-tag-sync@main
         with:
-          target-repo: your-org/your-fabric-fork
+          target-repo: swisstxt/cloud-foundation-fabric
           upstream-repo: GoogleCloudPlatform/cloud-foundation-fabric
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.SERVICE_ACCOUNT_TOKEN }}
 ```
 
 ## Inputs
@@ -35,23 +45,21 @@ jobs:
 
 ### Authentication Options
 
-For the `github-token` input, you have several options:
+For the `github-token` input, you need a classic token from a service account with "repo" scope. Here's why:
 
-1. **GitHub Actions Token** (`${{ secrets.GITHUB_TOKEN }}`):
-   - Default token provided by GitHub Actions
-   - Only works when the workflow runs in the same repository you're trying to sync
-   - Automatically expires after the workflow run
+1. **DO NOT USE GitHub Actions Token** (`${{ secrets.GITHUB_TOKEN }}`):
+   - Cannot trigger workflows in the created PR
+   - Will not work as intended for synchronization
 
-2. **GitHub App** (Recommended for cross-repo usage):
-   - Create and install a GitHub App on your repositories
-   - Use installation tokens
-   - More secure due to granular permissions and automatic token rotation
-   - Not tied to a personal account
+2. **DO NOT USE Fine-Grained PAT**:
+   - Requires administrators to manually grant access to repositories one-by-one
+   - Not practical for organization-wide usage
 
-3. **Personal Access Token (PAT)**:
-   - Can be used for cross-repository access
-   - Store as a secret and use like `${{ secrets.YOUR_PAT }}`
-   - Consider using fine-grained PATs for more precise permission control
+3. **Classic Service Account Token** (Recommended):
+   - Create a dedicated service account for automation
+   - Generate a classic token with "repo" scope
+   - Store as a secret and use like `${{ secrets.SERVICE_ACCOUNT_TOKEN }}`
+   - Works across all repositories without per-repo configuration
 
 ## What it does
 
