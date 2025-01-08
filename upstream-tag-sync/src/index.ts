@@ -60,14 +60,11 @@ async function retryWithBackoff<T>(
 async function getLatestTag(
   octokit: OctokitClient,
   owner: string,
-  repo: string,
-  attempt = 1,
-  maxAttempts = 5,
-  baseDelay = 1000
+  repo: string
 ): Promise<string | null> {
   info(`Fetching tags for ${owner}/${repo}`);
 
-  try {
+  return retryWithBackoff(async () => {
     const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
       owner,
       repo,
@@ -104,20 +101,7 @@ async function getLatestTag(
     const latestTag = validTags[0];
     info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
     return latestTag.name;
-
-  } catch (err) {
-    const error = err as Error;
-    if (attempt >= maxAttempts) {
-      throw new Error(`Failed to fetch tags after ` + maxAttempts.toString() + ` attempts: ${error.message}`);
-    }
-
-    // Calculate delay with exponential backoff and jitter
-    const delay = Math.min(baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000, 60000); // Cap at 60 seconds
-    info(`Error fetching tags (attempt ` + attempt.toString() + `/` + maxAttempts.toString() + `), waiting ` + Math.round(delay / 1000).toString() + `s before retry...`);
-    await new Promise(resolve => setTimeout(resolve, delay));
-
-    return getLatestTag(octokit, owner, repo, attempt + 1, maxAttempts, baseDelay);
-  }
+  });
 }
 
 /**

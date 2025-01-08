@@ -24487,9 +24487,9 @@ async function retryWithBackoff(operation, maxAttempts = 5, baseDelay = 1000) {
   }
   throw new Error("Should not reach here due to throw in loop");
 }
-async function getLatestTag(octokit, owner, repo, attempt = 1, maxAttempts = 5, baseDelay = 1000) {
+async function getLatestTag(octokit, owner, repo) {
   import_core.info(`Fetching tags for ${owner}/${repo}`);
-  try {
+  return retryWithBackoff(async () => {
     const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
       owner,
       repo,
@@ -24516,16 +24516,7 @@ async function getLatestTag(octokit, owner, repo, attempt = 1, maxAttempts = 5, 
     const latestTag = validTags[0];
     import_core.info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
     return latestTag.name;
-  } catch (err) {
-    const error = err;
-    if (attempt >= maxAttempts) {
-      throw new Error(`Failed to fetch tags after ` + maxAttempts.toString() + ` attempts: ${error.message}`);
-    }
-    const delay = Math.min(baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000, 60000);
-    import_core.info(`Error fetching tags (attempt ` + attempt.toString() + `/` + maxAttempts.toString() + `), waiting ` + Math.round(delay / 1000).toString() + `s before retry...`);
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    return getLatestTag(octokit, owner, repo, attempt + 1, maxAttempts, baseDelay);
-  }
+  });
 }
 async function getDefaultBranch(octokit, owner, repo) {
   return retryWithBackoff(async () => {
