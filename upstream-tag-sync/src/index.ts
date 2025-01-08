@@ -8,35 +8,44 @@ type OctokitClient = ReturnType<typeof getOctokit>;
 /**
  * Retries a function with exponential backoff when rate limits are hit
  *
- * @param {() => Promise<T>} operation - The async operation to retry
- * @param {number} maxAttempts - Maximum number of retry attempts
- * @param {number} baseDelay - Initial delay in milliseconds
+ * @param operation - The operation to execute
+ * @param maxAttempts - The maximum number of attempts
+ * @param baseDelay - The base delay in milliseconds
  * @returns {Promise<T>} The result of the operation
- * @throws {Error} Throws if max attempts reached or non-rate-limit error occurs
+ * @throws {Error} If the operation fails after all attempts
  */
 async function retryWithBackoff<T>(
-    operation: () => Promise<T>,
-    maxAttempts: number = 5,
-    baseDelay: number = 1000
+  operation: () => Promise<T>,
+  maxAttempts = 5,
+  baseDelay = 1000,
 ): Promise<T> {
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            return await operation();
-        } catch (err) {
-            const error = err as Error;
-            const isRateLimit = error.message.includes('rate limit') ||
-                error.message.includes('secondary rate limit');
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      if (
+        !(err instanceof Error) ||
+        !err.message.includes("rate limit") ||
+        attempt >= maxAttempts
+      ) {
+        throw err;
+      }
 
-            if (!isRateLimit || attempt === maxAttempts) {
-                throw error;
-            }
-
-            const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
-            info(`Rate limit hit, attempt ${attempt}/${maxAttempts}. Waiting ${Math.round(delay / 1000)}s...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-        }
+      const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+      const waitSeconds = Math.round(delay / 1000).toString();
+      info(
+        `Rate limit hit, attempt ` +
+        attempt.toString() +
+        `/` +
+        maxAttempts.toString() +
+        `. Waiting ` +
+        waitSeconds.toString() +
+        ` s...`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
-    throw new Error('Should not reach here due to throw in loop');
+  }
+  throw new Error("Should not reach here due to throw in loop");
 }
 
 /**
@@ -49,66 +58,66 @@ async function retryWithBackoff<T>(
  * @returns {Promise<string | null>} The name of the latest semver tag, or null if no valid tags found
  */
 async function getLatestTag(
-    octokit: OctokitClient,
-    owner: string,
-    repo: string,
-    attempt: number = 1,
-    maxAttempts: number = 5,
-    baseDelay: number = 1000
+  octokit: OctokitClient,
+  owner: string,
+  repo: string,
+  attempt = 1,
+  maxAttempts = 5,
+  baseDelay = 1000
 ): Promise<string | null> {
-    info(`Fetching tags for ${owner}/${repo}`);
+  info(`Fetching tags for ${owner}/${repo}`);
 
-    try {
-        const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
-            owner,
-            repo,
-            per_page: 100,
-        });
+  try {
+    const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
+      owner,
+      repo,
+      per_page: 100,
+    });
 
-        const tags: Array<{ name: string }> = [];
-        for await (const { data: pageTags } of iterator) {
-            tags.push(...pageTags);
-            info(`Fetched ${tags.length} tags so far...`);
+    const tags: { name: string }[] = [];
+    for await (const { data: pageTags } of iterator) {
+      tags.push(...pageTags);
+      info(`Fetched ` + tags.length.toString() + ` tags so far...`);
 
-            // Add a small delay between pages to be nice to the API
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-
-        if (tags.length === 0) {
-            info('No tags found in repository');
-            return null;
-        }
-
-        const validTags = tags
-            .map(tag => ({
-                name: tag.name,
-                version: semver.valid(semver.clean(tag.name))
-            }))
-            .filter((tag): tag is { name: string, version: string } => tag.version !== null)
-            .sort((a, b) => semver.rcompare(a.version, b.version));
-
-        if (validTags.length === 0) {
-            warning('No semver-compliant tags found in repository');
-            return null;
-        }
-
-        const latestTag = validTags[0];
-        info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
-        return latestTag.name;
-
-    } catch (err) {
-        const error = err as Error;
-        if (attempt >= maxAttempts) {
-            throw new Error(`Failed to fetch tags after ${maxAttempts} attempts: ${error.message}`);
-        }
-
-        // Calculate delay with exponential backoff and jitter
-        const delay = Math.min(baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000, 60000); // Cap at 60 seconds
-        info(`Error fetching tags (attempt ${attempt}/${maxAttempts}), waiting ${Math.round(delay / 1000)}s before retry...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-
-        return getLatestTag(octokit, owner, repo, attempt + 1, maxAttempts, baseDelay);
+      // Add a small delay between pages to be nice to the API
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
+
+    if (tags.length === 0) {
+      info('No tags found in repository');
+      return null;
+    }
+
+    const validTags = tags
+      .map(tag => ({
+        name: tag.name,
+        version: semver.valid(semver.clean(tag.name))
+      }))
+      .filter((tag): tag is { name: string, version: string } => tag.version !== null)
+      .sort((a, b) => semver.rcompare(a.version, b.version));
+
+    if (validTags.length === 0) {
+      warning('No semver-compliant tags found in repository');
+      return null;
+    }
+
+    const latestTag = validTags[0];
+    info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
+    return latestTag.name;
+
+  } catch (err) {
+    const error = err as Error;
+    if (attempt >= maxAttempts) {
+      throw new Error(`Failed to fetch tags after ` + maxAttempts.toString() + ` attempts: ${error.message}`);
+    }
+
+    // Calculate delay with exponential backoff and jitter
+    const delay = Math.min(baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000, 60000); // Cap at 60 seconds
+    info(`Error fetching tags (attempt ` + attempt.toString() + `/` + maxAttempts.toString() + `), waiting ` + Math.round(delay / 1000).toString() + `s before retry...`);
+    await new Promise(resolve => setTimeout(resolve, delay));
+
+    return getLatestTag(octokit, owner, repo, attempt + 1, maxAttempts, baseDelay);
+  }
 }
 
 /**
@@ -121,17 +130,17 @@ async function getLatestTag(
  * @returns {Promise<string>} The name of the default branch
  */
 async function getDefaultBranch(
-    octokit: OctokitClient,
-    owner: string,
-    repo: string
+  octokit: OctokitClient,
+  owner: string,
+  repo: string
 ): Promise<string> {
-    return retryWithBackoff(async () => {
-        const { data: repository } = await octokit.rest.repos.get({
-            owner,
-            repo
-        });
-        return repository.default_branch;
+  return retryWithBackoff(async () => {
+    const { data: repository } = await octokit.rest.repos.get({
+      owner,
+      repo
     });
+    return repository.default_branch;
+  });
 }
 
 /**
@@ -144,18 +153,18 @@ async function getDefaultBranch(
  * @returns {Promise<boolean>} True if a sync issue/PR exists
  */
 async function checkExistingSync(
-    octokit: OctokitClient,
-    owner: string,
-    repo: string,
-    syncLabel: string
+  octokit: OctokitClient,
+  owner: string,
+  repo: string,
+  syncLabel: string
 ): Promise<boolean> {
-    return retryWithBackoff(async () => {
-        const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
-            q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:pr`,
-            per_page: 1
-        });
-        return searchResults.total_count > 0;
+  return retryWithBackoff(async () => {
+    const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
+      q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:pr`,
+      per_page: 1
     });
+    return searchResults.total_count > 0;
+  });
 }
 
 /**
@@ -172,36 +181,36 @@ async function checkExistingSync(
  * @returns {Promise<number>} The number of the created pull request
  */
 async function createPullRequest(
-    octokit: OctokitClient,
-    owner: string,
-    repo: string,
-    title: string,
-    body: string,
-    head: string,
-    base: string,
-    labels: string[]
+  octokit: OctokitClient,
+  owner: string,
+  repo: string,
+  title: string,
+  body: string,
+  head: string,
+  base: string,
+  labels: string[]
 ): Promise<number> {
-    return retryWithBackoff(async () => {
-        const { data: pr } = await octokit.rest.pulls.create({
-            owner,
-            repo,
-            title,
-            body,
-            head,
-            base,
-        });
-
-        if (labels.length > 0) {
-            await octokit.rest.issues.addLabels({
-                owner,
-                repo,
-                issue_number: pr.number,
-                labels
-            });
-        }
-
-        return pr.number;
+  return retryWithBackoff(async () => {
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo,
+      title,
+      body,
+      head,
+      base,
     });
+
+    if (labels.length > 0) {
+      await octokit.rest.issues.addLabels({
+        owner,
+        repo,
+        issue_number: pr.number,
+        labels
+      });
+    }
+
+    return pr.number;
+  });
 }
 
 /**
@@ -214,61 +223,63 @@ async function createPullRequest(
  * @returns {Promise<void>} A promise that resolves when the sync is complete
  */
 async function run(): Promise<void> {
-    // Get inputs
-    const targetRepo = getInput('target-repo', { required: true });
-    const upstreamRepo = getInput('upstream-repo', { required: true });
-    const token = getInput('github-token', { required: true });
+  // Get inputs
+  const targetRepo = getInput('target-repo', { required: true });
+  const upstreamRepo = getInput('upstream-repo', { required: true });
+  const token = getInput('github-token', { required: true });
 
-    // Create octokit instance
-    const octokit = getOctokit(token);
+  // Create octokit instance
+  const octokit = getOctokit(token);
 
-    info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
+  info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
 
-    const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
-    const [targetOwner, targetRepoName] = targetRepo.split('/');
+  const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
+  const [targetOwner, targetRepoName] = targetRepo.split('/');
 
-    if (!upstreamOwner || !upstreamRepoName || !targetOwner || !targetRepoName) {
-        throw new Error('Invalid repository format');
-    }
+  if (!upstreamOwner || !upstreamRepoName || !targetOwner || !targetRepoName) {
+    throw new Error('Invalid repository format');
+  }
 
-    // Get latest upstream tag
-    const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
-    if (!latestTag) {
-        info('No valid tags found in upstream repository');
-        return;
-    }
-    info(`Latest upstream tag: ${latestTag}`);
+  // Get latest upstream tag
+  const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
+  if (!latestTag) {
+    info('No valid tags found in upstream repository');
+    return;
+  }
+  info(`Latest upstream tag: ${latestTag}`);
 
-    const syncLabel = `sync/upstream-${latestTag}`;
+  const syncLabel = `sync/upstream-${latestTag}`;
 
-    // Check for existing PR with the sync label
-    const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
-    if (syncExists) {
-        info(`PR for label ${syncLabel} already exists or was previously processed`);
-        return;
-    }
+  // Check for existing PR with the sync label
+  const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
+  if (syncExists) {
+    info(`PR for label ${syncLabel} already exists or was previously processed`);
+    return;
+  }
 
-    // Create branch name for the sync
-    const branchName = `sync/upstream-${latestTag}`;
+  // Create branch name for the sync
+  const branchName = `sync/upstream-${latestTag}`;
 
-    // Get repository default branch
-    const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
+  // Get repository default branch
+  const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
 
-    // Set up git configuration
-    await exec('git', ['config', '--global', 'user.name', 'github-actions[bot]']);
-    await exec('git', ['config', '--global', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
+  // Set up git configuration
+  await exec('git', ['config', '--global', 'user.name', 'github-actions[bot]']);
+  await exec('git', ['config', '--global', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
 
-    // Add upstream remote and fetch the specific tag
-    await exec('git', ['remote', 'add', 'upstream', `https://github.com/${upstreamRepo}.git`]);
-    await exec('git', ['fetch', 'upstream', `refs/tags/${latestTag}:refs/tags/${latestTag}`, '--no-tags']);
+  // Add upstream remote and fetch the specific tag
+  await exec('git', ['remote', 'add', 'upstream', `https://github.com/${upstreamRepo}.git`]);
+  await exec('git', ['fetch', 'upstream', `refs/tags/${latestTag}:refs/tags/${latestTag}`, '--no-tags']);
 
-    // Create and push the branch
-    await exec('git', ['checkout', '-b', branchName, latestTag]);
-    await exec('git', ['push', 'origin', branchName, '--force']);
+  // Create and push the branch
+  // NOTE: This assumes that the target branchName doesn't exist which it shouldn't, but a side effect is that
+  // we won't update the branch if the corresponding upstream tag was updated.
+  await exec('git', ['checkout', '-b', branchName, latestTag]);
+  await exec('git', ['push', 'origin', branchName, '--force']);
 
-    // Create pull request
-    const prTitle = `Sync: Update to upstream ${latestTag}`;
-    const prBody = `This PR syncs with upstream tag ${latestTag}.
+  // Create pull request
+  const prTitle = `Sync: Update to upstream ${latestTag}`;
+  const prBody = `This PR syncs with upstream tag ${latestTag}.
 
 ## Details
 - Source: ${upstreamRepo}@${latestTag}
@@ -277,22 +288,26 @@ async function run(): Promise<void> {
 
 This PR was automatically created by the sync action.`;
 
-    const prNumber = await createPullRequest(
-        octokit,
-        targetOwner,
-        targetRepoName,
-        prTitle,
-        prBody,
-        branchName,
-        defaultBranch,
-        ['sync', syncLabel]
-    );
+  const prNumber = await createPullRequest(
+    octokit,
+    targetOwner,
+    targetRepoName,
+    prTitle,
+    prBody,
+    branchName,
+    defaultBranch,
+    ['sync', syncLabel]
+  );
 
-    info(`Created PR #${prNumber} to sync with ${latestTag}`);
+  info(`Created PR #` + prNumber.toString() + ` to sync with ${latestTag}`);
 }
 
 try {
-    await run();
-} catch (err: unknown) {
-    setFailed(err instanceof Error ? err.message : 'An unknown error occurred');
+  await run();
+} catch (err) {
+  if (err instanceof Error) {
+    setFailed(err.stack ? `${err.message}\n${err.stack}` : err.message);
+  } else {
+    setFailed("An unknown error occurred");
+  }
 }

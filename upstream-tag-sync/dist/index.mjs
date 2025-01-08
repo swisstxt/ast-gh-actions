@@ -24476,13 +24476,12 @@ async function retryWithBackoff(operation, maxAttempts = 5, baseDelay = 1000) {
     try {
       return await operation();
     } catch (err) {
-      const error = err;
-      const isRateLimit = error.message.includes("rate limit") || error.message.includes("secondary rate limit");
-      if (!isRateLimit || attempt === maxAttempts) {
-        throw error;
+      if (!(err instanceof Error) || !err.message.includes("rate limit") || attempt >= maxAttempts) {
+        throw err;
       }
       const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
-      import_core.info(`Rate limit hit, attempt ${attempt}/${maxAttempts}. Waiting ${Math.round(delay / 1000)}s...`);
+      const waitSeconds = Math.round(delay / 1000).toString();
+      import_core.info(`Rate limit hit, attempt ` + attempt.toString() + `/` + maxAttempts.toString() + `. Waiting ` + waitSeconds.toString() + ` s...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
@@ -24499,7 +24498,7 @@ async function getLatestTag(octokit, owner, repo, attempt = 1, maxAttempts = 5, 
     const tags = [];
     for await (const { data: pageTags } of iterator) {
       tags.push(...pageTags);
-      import_core.info(`Fetched ${tags.length} tags so far...`);
+      import_core.info(`Fetched ` + tags.length.toString() + ` tags so far...`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
     if (tags.length === 0) {
@@ -24520,10 +24519,10 @@ async function getLatestTag(octokit, owner, repo, attempt = 1, maxAttempts = 5, 
   } catch (err) {
     const error = err;
     if (attempt >= maxAttempts) {
-      throw new Error(`Failed to fetch tags after ${maxAttempts} attempts: ${error.message}`);
+      throw new Error(`Failed to fetch tags after ` + maxAttempts.toString() + ` attempts: ${error.message}`);
     }
     const delay = Math.min(baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000, 60000);
-    import_core.info(`Error fetching tags (attempt ${attempt}/${maxAttempts}), waiting ${Math.round(delay / 1000)}s before retry...`);
+    import_core.info(`Error fetching tags (attempt ` + attempt.toString() + `/` + maxAttempts.toString() + `), waiting ` + Math.round(delay / 1000).toString() + `s before retry...`);
     await new Promise((resolve) => setTimeout(resolve, delay));
     return getLatestTag(octokit, owner, repo, attempt + 1, maxAttempts, baseDelay);
   }
@@ -24608,10 +24607,15 @@ async function run() {
 
 This PR was automatically created by the sync action.`;
   const prNumber = await createPullRequest(octokit, targetOwner, targetRepoName, prTitle, prBody, branchName, defaultBranch, ["sync", syncLabel]);
-  import_core.info(`Created PR #${prNumber} to sync with ${latestTag}`);
+  import_core.info(`Created PR #` + prNumber.toString() + ` to sync with ${latestTag}`);
 }
 try {
   await run();
 } catch (err) {
-  import_core.setFailed(err instanceof Error ? err.message : "An unknown error occurred");
+  if (err instanceof Error) {
+    import_core.setFailed(err.stack ? `${err.message}
+${err.stack}` : err.message);
+  } else {
+    import_core.setFailed("An unknown error occurred");
+  }
 }
