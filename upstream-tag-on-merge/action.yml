@@ -1,0 +1,12 @@
+name: 'Upstream Tag On Merge'
+description: 'Creates a git tag when a upstream sync PR is merged, maintaining tag synchronization with upstream repository'
+branding:
+  icon: 'tag'
+  color: 'blue'
+inputs:
+  github-token:
+    description: 'GitHub token for authentication. Read more at https://docs.github.com/en/actions/reference/authentication-in-a-workflow'
+    required: true
+runs:
+  using: 'node20'
+  main: 'dist/index.mjs'
