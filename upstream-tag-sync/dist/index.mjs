@@ -24471,17 +24471,52 @@ var import_core = __toESM(require_core(), 1);
 var import_github = __toESM(require_github(), 1);
 var import_exec = __toESM(require_exec(), 1);
 var import_semver = __toESM(require_semver2(), 1);
-async function retryWithBackoff(operation, maxAttempts = 5, baseDelay = 1000) {
+async function retryWithGitHubRateLimit(operation, maxAttempts = 5, baseDelay = 1000) {
   for (let attempt = 1;attempt <= maxAttempts; attempt++) {
     try {
       return await operation();
     } catch (err) {
-      if (!(err instanceof Error) || !err.message.includes("rate limit") || attempt >= maxAttempts) {
-        throw err;
+      const error = err;
+      if (!error.response || ![403, 429].includes(error.response.status)) {
+        throw error;
       }
-      const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
-      const waitSeconds = Math.round(delay / 1000);
-      import_core.info(`Rate limit hit, attempt ${attempt}/${maxAttempts}. Waiting ${waitSeconds}s...`);
+      if (attempt >= maxAttempts) {
+        const headers2 = error.response.headers;
+        const resource2 = headers2["x-ratelimit-resource"];
+        const limit2 = headers2["x-ratelimit-limit"];
+        const used2 = headers2["x-ratelimit-used"];
+        throw new Error(`GitHub API rate limit exceeded after ${maxAttempts} attempts. ` + `Resource: ${resource2}, Limit: ${limit2}, Used: ${used2}`);
+      }
+      const headers = error.response.headers;
+      const remainingRequests = Number(headers["x-ratelimit-remaining"] ?? "0");
+      const rateLimitReset = Number(headers["x-ratelimit-reset"] ?? "0") * 1000;
+      const resource = headers["x-ratelimit-resource"];
+      const limit = headers["x-ratelimit-limit"];
+      const used = headers["x-ratelimit-used"];
+      const retryAfter = headers["retry-after"];
+      let delay;
+      if (remainingRequests === 0 && rateLimitReset) {
+        delay = rateLimitReset - Date.now();
+        import_core.info(`Rate limit exceeded for ${resource}, attempt ${attempt}/${maxAttempts}:
+` + `  - Limit: ${limit}
+` + `  - Used: ${used}
+` + `  - Remaining: ${remainingRequests}
+` + `  - Resets at: ${new Date(rateLimitReset).toISOString()}
+` + `Waiting ${Math.round(delay / 1000)}s until reset...`);
+      } else if (retryAfter) {
+        delay = Number(retryAfter) * 1000;
+        import_core.info(`Secondary rate limit exceeded, attempt ${attempt}/${maxAttempts}:
+` + `  - Resource: ${resource}
+` + `  - Retry-After: ${retryAfter}s
+` + `Waiting as specified by GitHub...`);
+      } else {
+        delay = Math.max(60000, baseDelay * Math.pow(2, attempt - 1));
+        import_core.info(`Secondary rate limit exceeded, attempt ${attempt}/${maxAttempts}:
+` + `  - Resource: ${resource}
+` + `  - No Retry-After header provided
+` + `Using exponential backoff, waiting ${Math.round(delay / 1000)}s...`);
+      }
+      delay = Math.max(delay, 0) + Math.random() * 1000;
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
@@ -24489,7 +24524,7 @@ async function retryWithBackoff(operation, maxAttempts = 5, baseDelay = 1000) {
 }
 async function getLatestTag(octokit, owner, repo) {
   import_core.info(`Fetching tags for ${owner}/${repo}`);
-  return retryWithBackoff(async () => {
+  return retryWithGitHubRateLimit(async () => {
     const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
       owner,
       repo,
@@ -24519,7 +24554,7 @@ async function getLatestTag(octokit, owner, repo) {
   });
 }
 async function getDefaultBranch(octokit, owner, repo) {
-  return retryWithBackoff(async () => {
+  return retryWithGitHubRateLimit(async () => {
     const { data: repository } = await octokit.rest.repos.get({
       owner,
       repo
@@ -24528,7 +24563,7 @@ async function getDefaultBranch(octokit, owner, repo) {
   });
 }
 async function checkExistingSync(octokit, owner, repo, syncLabel) {
-  return retryWithBackoff(async () => {
+  return retryWithGitHubRateLimit(async () => {
     const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
       q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:pr`,
       per_page: 1
@@ -24537,7 +24572,7 @@ async function checkExistingSync(octokit, owner, repo, syncLabel) {
   });
 }
 async function createPullRequest(octokit, owner, repo, title, body, head, base, labels) {
-  return retryWithBackoff(async () => {
+  return retryWithGitHubRateLimit(async () => {
     const { data: pr } = await octokit.rest.pulls.create({
       owner,
       repo,

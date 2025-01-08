@@ -5,16 +5,36 @@ import semver from 'semver';
 
 type OctokitClient = ReturnType<typeof getOctokit>;
 
+interface RateLimitHeaders {
+  'x-ratelimit-limit'?: string;
+  'x-ratelimit-remaining'?: string;
+  'x-ratelimit-used'?: string;
+  'x-ratelimit-reset'?: string;
+  'x-ratelimit-resource'?: string;
+  'retry-after'?: string;
+}
+
+type GitHubError = Error & {
+  response?: {
+    status: number;
+    headers: RateLimitHeaders;
+  };
+};
+
 /**
- * Retries a function with exponential backoff when rate limits are hit
+ * Retries a GitHub API operation with proper rate limit handling
+ * Utilizes all GitHub rate limit headers for informed retry decisions
+ * Follow GitHub's rate limit documentation:
+ * https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api?apiVersion=2022-11-28
+ * https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api?apiVersion=2022-11-28#handle-rate-limit-errors-appropriately
  *
  * @param operation - The operation to execute
  * @param maxAttempts - The maximum number of attempts
- * @param baseDelay - The base delay in milliseconds
+ * @param baseDelay - The base delay in milliseconds for exponential backoff
  * @returns {Promise<T>} The result of the operation
  * @throws {Error} If the operation fails after all attempts
  */
-async function retryWithBackoff<T>(
+async function retryWithGitHubRateLimit<T>(
   operation: () => Promise<T>,
   maxAttempts = 5,
   baseDelay = 1000,
@@ -23,19 +43,68 @@ async function retryWithBackoff<T>(
     try {
       return await operation();
     } catch (err) {
-      if (
-        !(err instanceof Error) ||
-        !err.message.includes("rate limit") ||
-        attempt >= maxAttempts
-      ) {
-        throw err;
+      const error = err as GitHubError;
+
+      if (!error.response || ![403, 429].includes(error.response.status)) {
+        throw error;
       }
 
-      const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
-      const waitSeconds = Math.round(delay / 1000);
-      info(
-        `Rate limit hit, attempt ${attempt}/${maxAttempts}. Waiting ${waitSeconds}s...`,
-      );
+      if (attempt >= maxAttempts) {
+        const headers = error.response.headers;
+        const resource = headers['x-ratelimit-resource'];
+        const limit = headers['x-ratelimit-limit'];
+        const used = headers['x-ratelimit-used'];
+
+        throw new Error(
+          `GitHub API rate limit exceeded after ${maxAttempts} attempts. ` +
+          `Resource: ${resource}, Limit: ${limit}, Used: ${used}`
+        );
+      }
+
+      const headers = error.response.headers;
+      const remainingRequests = Number(headers['x-ratelimit-remaining'] ?? '0');
+      const rateLimitReset = Number(headers['x-ratelimit-reset'] ?? '0') * 1000; // Convert to milliseconds
+      const resource = headers['x-ratelimit-resource'];
+      const limit = headers['x-ratelimit-limit'];
+      const used = headers['x-ratelimit-used'];
+      const retryAfter = headers['retry-after'];
+
+      let delay: number;
+
+      if (remainingRequests === 0 && rateLimitReset) {
+        // Primary rate limit
+        delay = rateLimitReset - Date.now();
+        info(
+          `Rate limit exceeded for ${resource}, attempt ${attempt}/${maxAttempts}:\n` +
+          `  - Limit: ${limit}\n` +
+          `  - Used: ${used}\n` +
+          `  - Remaining: ${remainingRequests}\n` +
+          `  - Resets at: ${new Date(rateLimitReset).toISOString()}\n` +
+          `Waiting ${Math.round(delay / 1000)}s until reset...`
+        );
+      } else if (retryAfter) {
+        // Secondary rate limit with Retry-After
+        delay = Number(retryAfter) * 1000;
+        info(
+          `Secondary rate limit exceeded, attempt ${attempt}/${maxAttempts}:\n` +
+          `  - Resource: ${resource}\n` +
+          `  - Retry-After: ${retryAfter}s\n` +
+          `Waiting as specified by GitHub...`
+        );
+      } else {
+        // Secondary rate limit without Retry-After
+        delay = Math.max(60000, baseDelay * Math.pow(2, attempt - 1));
+        info(
+          `Secondary rate limit exceeded, attempt ${attempt}/${maxAttempts}:\n` +
+          `  - Resource: ${resource}\n` +
+          `  - No Retry-After header provided\n` +
+          `Using exponential backoff, waiting ${Math.round(delay / 1000)}s...`
+        );
+      }
+
+      // Ensure delay is positive and add small jitter
+      delay = Math.max(delay, 0) + Math.random() * 1000;
+
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
@@ -58,7 +127,7 @@ async function getLatestTag(
 ): Promise<string | null> {
   info(`Fetching tags for ${owner}/${repo}`);
 
-  return retryWithBackoff(async () => {
+  return retryWithGitHubRateLimit(async () => {
     const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
       owner,
       repo,
@@ -112,7 +181,7 @@ async function getDefaultBranch(
   owner: string,
   repo: string
 ): Promise<string> {
-  return retryWithBackoff(async () => {
+  return retryWithGitHubRateLimit(async () => {
     const { data: repository } = await octokit.rest.repos.get({
       owner,
       repo
@@ -136,7 +205,7 @@ async function checkExistingSync(
   repo: string,
   syncLabel: string
 ): Promise<boolean> {
-  return retryWithBackoff(async () => {
+  return retryWithGitHubRateLimit(async () => {
     const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
       q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:pr`,
       per_page: 1
@@ -168,7 +237,7 @@ async function createPullRequest(
   base: string,
   labels: string[]
 ): Promise<number> {
-  return retryWithBackoff(async () => {
+  return retryWithGitHubRateLimit(async () => {
     const { data: pr } = await octokit.rest.pulls.create({
       owner,
       repo,
