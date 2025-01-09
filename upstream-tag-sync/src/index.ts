@@ -1,221 +1,360 @@
 import { getInput, info, warning, setFailed } from '@actions/core';
 import { getOctokit } from '@actions/github';
-import { exec as execCommand } from '@actions/exec';
-import type { components } from '@octokit/openapi-types';
-
-interface TagInfo {
-    name: string;
-    version: string | null;
-}
-
-type Tag = components['schemas']['tag'];
+import { exec } from '@actions/exec';
 import semver from 'semver';
 
 type OctokitClient = ReturnType<typeof getOctokit>;
 
-/**
- * Gets the name of the latest semver-compliant tag from a GitHub repository
- * @param {OctokitClient} octokit - Configured Octokit instance
- * @param {string} owner - Repository owner
- * @param {string} repo - Repository name
- * @returns {Promise<string|null>} Latest tag name or null if no valid tags found
- * @throws {Error} If the API request fails
- */
-async function getLatestTag(octokit: OctokitClient, owner: string, repo: string): Promise<string | null> {
-    try {
-        const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
-            owner,
-            repo,
-            per_page: 100,
-        });
-
-        const tags: Tag[] = [];
-
-        for await (const { data: pageTags } of iterator) {
-            tags.push(...pageTags);
-        }
-
-        if (tags.length === 0) {
-            info('No tags found in repository');
-            return null;
-        }
-
-        // Process and sort tags
-        const validTags = tags
-            .map((tag): TagInfo => ({
-                name: tag.name,
-                version: semver.valid(semver.clean(tag.name))
-            }))
-            .filter((tag): tag is TagInfo & { version: string } => tag.version !== null)
-            .sort((a, b) => semver.rcompare(a.version, b.version));
-
-        if (validTags.length === 0) {
-            warning('No semver-compliant tags found in repository');
-            return null;
-        }
-
-        const latestTag = validTags[0];
-        info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
-        return latestTag.name;
-
-    } catch (error) {
-        if (error instanceof Error) {
-            console.error('Error:', error.message);
-        }
-        throw error;
-    }
+interface RateLimitHeaders {
+  'x-ratelimit-limit'?: string;
+  'x-ratelimit-remaining'?: string;
+  'x-ratelimit-used'?: string;
+  'x-ratelimit-reset'?: string;
+  'x-ratelimit-resource'?: string;
+  'retry-after'?: string;
 }
 
-async function run(): Promise<void> {
-    // Get inputs
-    const targetRepo = getInput('target-repo', { required: true });
-    const upstreamRepo = getInput('upstream-repo', { required: true });
-    const token = getInput('github-token', { required: true });
+type GitHubError = Error & {
+  response?: {
+    status: number;
+    headers: RateLimitHeaders;
+  };
+};
 
-    // Create octokit instance
-    const octokit = getOctokit(token);
-
-    info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
-
-    // Get latest upstream tag
-    const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
-    if (!upstreamOwner || !upstreamRepoName) {
-        throw new Error('Invalid upstream repository format');
-    }
-
-    const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
-    if (!latestTag) {
-        info('No valid tags found in upstream repository');
-        return;
-    }
-    info(`Latest upstream tag: ${latestTag}`);
-
-    // Check for existing PR
-    const [targetOwner, targetRepoName] = targetRepo.split('/');
-    if (!targetOwner || !targetRepoName) {
-        throw new Error('Invalid target repository format');
-    }
-
-    const labelName = `sync/upstream-${latestTag}`;
-
-    const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
-        q: `repo:${targetOwner}/${targetRepoName} is:pr label:"${labelName}"`,
-        per_page: 1
-    });
-
-    if (searchResults.total_count > 0) {
-        info(`PR for tag ${latestTag} already exists or was previously processed`);
-        return;
-    }
-
-    // Set up git configuration
-    await execCommand('git', ['config', '--global', 'user.name', 'github-actions[bot]']);
-    await execCommand('git', ['config', '--global', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
-
-    // Add upstream remote and fetch
-    await execCommand('git', ['remote', 'add', 'upstream', `https://github.com/${upstreamRepo}.git`]);
-    await execCommand('git', ['fetch', 'upstream', '--tags']);
-
-    // Create and switch to new branch
-    const branchName = `sync/upstream-${latestTag}`;
-    await execCommand('git', ['checkout', '-b', branchName]);
-
-    let hasConflicts = false;
-    let mergeMessage = '';
-
-    // Attempt to merge the upstream tag
+/**
+ * Retries a GitHub API operation with proper rate limit handling
+ * Utilizes all GitHub rate limit headers for informed retry decisions
+ * Follow GitHub's rate limit documentation:
+ * https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api?apiVersion=2022-11-28
+ * https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api?apiVersion=2022-11-28#handle-rate-limit-errors-appropriately
+ *
+ * @param operation - The operation to execute
+ * @param maxAttempts - The maximum number of attempts
+ * @param baseDelay - The base delay in milliseconds for exponential backoff
+ * @returns {Promise<T>} The result of the operation
+ * @throws {Error} If the operation fails after all attempts
+ */
+async function retryWithGitHubRateLimit<T>(
+  operation: () => Promise<T>,
+  maxAttempts = 5,
+  baseDelay = 1000,
+): Promise<T> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-        await execCommand('git', ['merge', latestTag]);
-        mergeMessage = 'Successfully merged upstream tag';
-        info(mergeMessage);
-    } catch (error) {
-        hasConflicts = true;
-        mergeMessage = 'Merge conflicts detected. Manual resolution required.';
-        warning(mergeMessage);
+      return await operation();
+    } catch (err) {
+      const error = err as GitHubError;
 
-        // Instead of hard reset, we'll push the conflicting state
-        // This allows reviewers to resolve conflicts manually
-        await execCommand('git', ['add', '.']);
-        await execCommand('git', ['commit', '--no-verify', '-m', 'WIP: Sync with upstream (conflicts to resolve)']);
+      if (!error.response || ![403, 429].includes(error.response.status)) {
+        throw error;
+      }
+
+      if (attempt >= maxAttempts) {
+        const headers = error.response.headers;
+        const resource = headers['x-ratelimit-resource'];
+        const limit = headers['x-ratelimit-limit'];
+        const used = headers['x-ratelimit-used'];
+
+        throw new Error(
+          `GitHub API rate limit exceeded after ${maxAttempts} attempts. ` +
+          `Resource: ${resource}, Limit: ${limit}, Used: ${used}`
+        );
+      }
+
+      const headers = error.response.headers;
+      const remainingRequests = Number(headers['x-ratelimit-remaining'] ?? '0');
+      const rateLimitReset = Number(headers['x-ratelimit-reset'] ?? '0') * 1000; // Convert to milliseconds
+      const resource = headers['x-ratelimit-resource'];
+      const limit = headers['x-ratelimit-limit'];
+      const used = headers['x-ratelimit-used'];
+      const retryAfter = headers['retry-after'];
+
+      let delay: number;
+
+      if (remainingRequests === 0 && rateLimitReset) {
+        // Primary rate limit
+        delay = rateLimitReset - Date.now();
+        info(
+          `Rate limit exceeded for ${resource}, attempt ${attempt}/${maxAttempts}:\n` +
+          `  - Limit: ${limit}\n` +
+          `  - Used: ${used}\n` +
+          `  - Remaining: ${remainingRequests}\n` +
+          `  - Resets at: ${new Date(rateLimitReset).toISOString()}\n` +
+          `Waiting ${Math.round(delay / 1000)}s until reset...`
+        );
+      } else if (retryAfter) {
+        // Secondary rate limit with Retry-After
+        delay = Number(retryAfter) * 1000;
+        info(
+          `Secondary rate limit exceeded, attempt ${attempt}/${maxAttempts}:\n` +
+          `  - Resource: ${resource}\n` +
+          `  - Retry-After: ${retryAfter}s\n` +
+          `Waiting as specified by GitHub...`
+        );
+      } else {
+        // Secondary rate limit without Retry-After
+        delay = Math.max(60000, baseDelay * Math.pow(2, attempt - 1));
+        info(
+          `Secondary rate limit exceeded, attempt ${attempt}/${maxAttempts}:\n` +
+          `  - Resource: ${resource}\n` +
+          `  - No Retry-After header provided\n` +
+          `Using exponential backoff, waiting ${Math.round(delay / 1000)}s...`
+        );
+      }
+
+      // Ensure delay is positive and add small jitter
+      delay = Math.max(delay, 0) + Math.random() * 1000;
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("Should not reach here due to throw in loop");
+}
+
+/**
+ * Gets the latest semver-compliant tag from a GitHub repository
+ * Uses pagination to fetch all tags and handles rate limiting
+ *
+ * @param {OctokitClient} octokit - The authenticated GitHub client
+ * @param {string} owner - The owner of the repository
+ * @param {string} repo - The name of the repository
+ * @returns {Promise<string | null>} The name of the latest semver tag, or null if no valid tags found
+ */
+async function getLatestTag(
+  octokit: OctokitClient,
+  owner: string,
+  repo: string
+): Promise<string | null> {
+  info(`Fetching tags for ${owner}/${repo}`);
+
+  return retryWithGitHubRateLimit(async () => {
+    const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
+      owner,
+      repo,
+      per_page: 100,
+    });
+
+    const tags: { name: string }[] = [];
+    for await (const { data: pageTags } of iterator) {
+      tags.push(...pageTags);
+      info(`Fetched ${tags.length} tags so far...`);
+
+      // Add a small delay between pages to be nice to the API
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    // Push to origin (with or without conflicts)
-    await execCommand('git', [
-        'push',
-        `https://x-access-token:${token}@github.com/${targetRepo}.git`,
-        branchName,
-        '--force-with-lease'
-    ]);
+    if (tags.length === 0) {
+      info('No tags found in repository');
+      return null;
+    }
 
-    // Get repository default branch
-    const { data: repo } = await octokit.rest.repos.get({
-        owner: targetOwner,
-        repo: targetRepoName
+    const validTags = tags
+      .map(tag => ({
+        name: tag.name,
+        version: semver.valid(semver.clean(tag.name))
+      }))
+      .filter((tag): tag is { name: string, version: string } => tag.version !== null)
+      .sort((a, b) => semver.rcompare(a.version, b.version));
+
+    if (validTags.length === 0) {
+      warning('No semver-compliant tags found in repository');
+      return null;
+    }
+
+    const latestTag = validTags[0];
+    info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
+    return latestTag.name;
+  });
+}
+
+/**
+ * Gets the default branch for a repository
+ * Handles rate limiting with exponential backoff
+ *
+ * @param {OctokitClient} octokit - The authenticated GitHub client
+ * @param {string} owner - The owner of the repository
+ * @param {string} repo - The name of the repository
+ * @returns {Promise<string>} The name of the default branch
+ */
+async function getDefaultBranch(
+  octokit: OctokitClient,
+  owner: string,
+  repo: string
+): Promise<string> {
+  return retryWithGitHubRateLimit(async () => {
+    const { data: repository } = await octokit.rest.repos.get({
+      owner,
+      repo
     });
-    const defaultBranch = repo.default_branch;
+    return repository.default_branch;
+  });
+}
 
-    // Common parts of the PR message
-    const commonHeader = `This PR ${hasConflicts ? 'attempts to' : ''} sync your fork with the upstream repository's tag ${latestTag}.`;
-    const commonChanges = `## Changes included:
-- ${hasConflicts ? 'Attempted merge' : 'Successfully merged'} with tag ${latestTag}
-- Updates from: https://github.com/${upstreamRepo}`;
-    const commonFooter = `You can safely delete the \`${branchName}\` branch afterward.`;
+/**
+ * Checks if there's already a sync PR for the given tag
+ *
+ * @param {OctokitClient} octokit - The authenticated GitHub client
+ * @param {string} owner - The owner of the repository
+ * @param {string} repo - The name of the repository
+ * @param {string} syncLabel - The label to search for
+ * @returns {Promise<boolean>} True if a sync issue/PR exists
+ */
+async function checkExistingSync(
+  octokit: OctokitClient,
+  owner: string,
+  repo: string,
+  syncLabel: string
+): Promise<boolean> {
+  return retryWithGitHubRateLimit(async () => {
+    const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
+      q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:pr`,
+      per_page: 1
+    });
+    return searchResults.total_count > 0;
+  });
+}
 
-    // Create PR with appropriate message
-    const conflictInstructions = `## ⚠️ Merge Conflicts Detected
-This PR contains merge conflicts that need to be resolved manually. Please:
-1. Checkout this branch locally
-2. Resolve the conflicts
-3. Push the resolved changes back to this branch
-
-### Next Steps:
-1. Resolve conflicts between your customizations and upstream changes
-2. Once conflicts are resolved:
-   - If you want to sync to this tag: merge the PR
-   - If you don't want to sync: close the PR
-3. ${commonFooter}`;
-
-    const normalInstructions = `Please review the changes and:
-- If you want to sync to this tag: merge the PR
-- If you don't want to sync: close the PR
-
-${commonFooter}`;
-
-    const prBody = `${commonHeader}
-
-${hasConflicts ? conflictInstructions : normalInstructions}
-
-${commonChanges}`;
-
+/**
+ * Creates a pull request in the target repository
+ *
+ * @param {OctokitClient} octokit - The authenticated GitHub client
+ * @param {string} owner - The owner of the repository
+ * @param {string} repo - The name of the repository
+ * @param {string} title - The title of the pull request
+ * @param {string} body - The body of the pull request
+ * @param {string} head - The branch to merge from
+ * @param {string} base - The branch to merge into
+ * @param {string[]} labels - The labels to add to the pull request
+ * @returns {Promise<number>} The number of the created pull request
+ */
+async function createPullRequest(
+  octokit: OctokitClient,
+  owner: string,
+  repo: string,
+  title: string,
+  body: string,
+  head: string,
+  base: string,
+  labels: string[]
+): Promise<number> {
+  return retryWithGitHubRateLimit(async () => {
     const { data: pr } = await octokit.rest.pulls.create({
-        owner: targetOwner,
-        repo: targetRepoName,
-        title: hasConflicts
-            ? `[Conflicts] Sync with upstream tag ${latestTag}`
-            : `Sync with upstream tag ${latestTag}`,
-        head: branchName,
-        base: defaultBranch,
-        body: prBody
+      owner,
+      repo,
+      title,
+      body,
+      head,
+      base,
     });
 
-    // Add appropriate labels
-    const labels = [labelName];
-    if (hasConflicts) {
-        labels.push('merge-conflicts');
+    if (labels.length > 0) {
+      await octokit.rest.issues.addLabels({
+        owner,
+        repo,
+        issue_number: pr.number,
+        labels
+      });
     }
 
-    await octokit.rest.issues.addLabels({
-        owner: targetOwner,
-        repo: targetRepoName,
-        issue_number: pr.number,  // Note that PRs are also issues on GitHub
-        labels: labels
-    });
+    return pr.number;
+  });
+}
 
-    info(`Created PR #${pr.number}${hasConflicts ? ' with merge conflicts' : ''}`);
+/**
+ * Main function that executes the sync workflow.
+ * This function:
+ * 1. Fetches the latest tag from the upstream repository
+ * 2. Creates a new branch from that tag
+ * 3. Creates a pull request to merge the changes
+ *
+ * @returns {Promise<void>} A promise that resolves when the sync is complete
+ */
+async function run(): Promise<void> {
+  // Get inputs
+  const targetRepo = getInput('target-repo', { required: true });
+  const upstreamRepo = getInput('upstream-repo', { required: true });
+  const token = getInput('github-token', { required: true });
+
+  // Create octokit instance
+  const octokit = getOctokit(token);
+
+  info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
+
+  const [upstreamOwner, upstreamRepoName] = upstreamRepo.split('/');
+  const [targetOwner, targetRepoName] = targetRepo.split('/');
+
+  if (!upstreamOwner || !upstreamRepoName || !targetOwner || !targetRepoName) {
+    throw new Error('Invalid repository format');
+  }
+
+  // Get latest upstream tag
+  const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
+  if (!latestTag) {
+    info('No valid tags found in upstream repository');
+    return;
+  }
+  info(`Latest upstream tag: ${latestTag}`);
+
+  const syncLabel = `sync/upstream-${latestTag}`;
+
+  // Check for existing PR with the sync label
+  const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
+  if (syncExists) {
+    info(`PR for label ${syncLabel} already exists or was previously processed`);
+    return;
+  }
+
+  // Create branch name for the sync
+  const branchName = `sync/upstream-${latestTag}`;
+
+  // Get repository default branch
+  const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
+
+  // Set up git configuration
+  await exec('git', ['config', '--global', 'user.name', 'github-actions[bot]']);
+  await exec('git', ['config', '--global', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
+
+  // Add upstream remote and fetch the specific tag
+  await exec('git', ['remote', 'add', 'upstream', `https://github.com/${upstreamRepo}.git`]);
+  await exec('git', ['fetch', 'upstream', `refs/tags/${latestTag}:refs/tags/${latestTag}`, '--no-tags']);
+
+  // Create and push the branch
+  // NOTE: This assumes that the target branchName doesn't exist which it shouldn't, but a side effect is that
+  // we won't update the branch if the corresponding upstream tag was updated.
+  await exec('git', ['checkout', '-b', branchName, latestTag]);
+  await exec('git', ['push', 'origin', branchName, '--force']);
+
+  // Create pull request
+  const prTitle = `Sync: Update to upstream ${latestTag}`;
+  const prBody = `This PR syncs with upstream tag ${latestTag}.
+
+## Details
+- Source: ${upstreamRepo}@${latestTag}
+- Target Branch: \`${defaultBranch}\`
+- Sync Branch: \`${branchName}\`
+
+This PR was automatically created by the sync action.`;
+
+  const prNumber = await createPullRequest(
+    octokit,
+    targetOwner,
+    targetRepoName,
+    prTitle,
+    prBody,
+    branchName,
+    defaultBranch,
+    ['sync', syncLabel]
+  );
+
+  info(`Created PR #${prNumber} to sync with ${latestTag}`);
 }
 
 try {
-    await run();
-} catch (err: unknown) {
-    setFailed(err instanceof Error ? err.message : 'An unknown error occurred');
+  await run();
+} catch (err) {
+  if (err instanceof Error) {
+    setFailed(err.stack ? `${err.message}\n${err.stack}` : err.message);
+  } else {
+    setFailed("An unknown error occurred");
+  }
 }

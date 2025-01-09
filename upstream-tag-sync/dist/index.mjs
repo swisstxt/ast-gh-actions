@@ -24471,8 +24471,60 @@ var import_core = __toESM(require_core(), 1);
 var import_github = __toESM(require_github(), 1);
 var import_exec = __toESM(require_exec(), 1);
 var import_semver = __toESM(require_semver2(), 1);
+async function retryWithGitHubRateLimit(operation, maxAttempts = 5, baseDelay = 1000) {
+  for (let attempt = 1;attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      const error = err;
+      if (!error.response || ![403, 429].includes(error.response.status)) {
+        throw error;
+      }
+      if (attempt >= maxAttempts) {
+        const headers2 = error.response.headers;
+        const resource2 = headers2["x-ratelimit-resource"];
+        const limit2 = headers2["x-ratelimit-limit"];
+        const used2 = headers2["x-ratelimit-used"];
+        throw new Error(`GitHub API rate limit exceeded after ${maxAttempts} attempts. ` + `Resource: ${resource2}, Limit: ${limit2}, Used: ${used2}`);
+      }
+      const headers = error.response.headers;
+      const remainingRequests = Number(headers["x-ratelimit-remaining"] ?? "0");
+      const rateLimitReset = Number(headers["x-ratelimit-reset"] ?? "0") * 1000;
+      const resource = headers["x-ratelimit-resource"];
+      const limit = headers["x-ratelimit-limit"];
+      const used = headers["x-ratelimit-used"];
+      const retryAfter = headers["retry-after"];
+      let delay;
+      if (remainingRequests === 0 && rateLimitReset) {
+        delay = rateLimitReset - Date.now();
+        import_core.info(`Rate limit exceeded for ${resource}, attempt ${attempt}/${maxAttempts}:
+` + `  - Limit: ${limit}
+` + `  - Used: ${used}
+` + `  - Remaining: ${remainingRequests}
+` + `  - Resets at: ${new Date(rateLimitReset).toISOString()}
+` + `Waiting ${Math.round(delay / 1000)}s until reset...`);
+      } else if (retryAfter) {
+        delay = Number(retryAfter) * 1000;
+        import_core.info(`Secondary rate limit exceeded, attempt ${attempt}/${maxAttempts}:
+` + `  - Resource: ${resource}
+` + `  - Retry-After: ${retryAfter}s
+` + `Waiting as specified by GitHub...`);
+      } else {
+        delay = Math.max(60000, baseDelay * Math.pow(2, attempt - 1));
+        import_core.info(`Secondary rate limit exceeded, attempt ${attempt}/${maxAttempts}:
+` + `  - Resource: ${resource}
+` + `  - No Retry-After header provided
+` + `Using exponential backoff, waiting ${Math.round(delay / 1000)}s...`);
+      }
+      delay = Math.max(delay, 0) + Math.random() * 1000;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("Should not reach here due to throw in loop");
+}
 async function getLatestTag(octokit, owner, repo) {
-  try {
+  import_core.info(`Fetching tags for ${owner}/${repo}`);
+  return retryWithGitHubRateLimit(async () => {
     const iterator = octokit.paginate.iterator(octokit.rest.repos.listTags, {
       owner,
       repo,
@@ -24481,6 +24533,8 @@ async function getLatestTag(octokit, owner, repo) {
     const tags = [];
     for await (const { data: pageTags } of iterator) {
       tags.push(...pageTags);
+      import_core.info(`Fetched ${tags.length} tags so far...`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
     if (tags.length === 0) {
       import_core.info("No tags found in repository");
@@ -24497,12 +24551,46 @@ async function getLatestTag(octokit, owner, repo) {
     const latestTag = validTags[0];
     import_core.info(`Found latest tag: ${latestTag.name} (${latestTag.version})`);
     return latestTag.name;
-  } catch (error) {
-    if (error instanceof Error) {
-      console.error("Error:", error.message);
+  });
+}
+async function getDefaultBranch(octokit, owner, repo) {
+  return retryWithGitHubRateLimit(async () => {
+    const { data: repository } = await octokit.rest.repos.get({
+      owner,
+      repo
+    });
+    return repository.default_branch;
+  });
+}
+async function checkExistingSync(octokit, owner, repo, syncLabel) {
+  return retryWithGitHubRateLimit(async () => {
+    const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
+      q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:pr`,
+      per_page: 1
+    });
+    return searchResults.total_count > 0;
+  });
+}
+async function createPullRequest(octokit, owner, repo, title, body, head, base, labels) {
+  return retryWithGitHubRateLimit(async () => {
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo,
+      title,
+      body,
+      head,
+      base
+    });
+    if (labels.length > 0) {
+      await octokit.rest.issues.addLabels({
+        owner,
+        repo,
+        issue_number: pr.number,
+        labels
+      });
     }
-    throw error;
-  }
+    return pr.number;
+  });
 }
 async function run() {
   const targetRepo = import_core.getInput("target-repo", { required: true });
@@ -24511,8 +24599,9 @@ async function run() {
   const octokit = import_github.getOctokit(token);
   import_core.info(`Checking for updates between ${targetRepo} and ${upstreamRepo}`);
   const [upstreamOwner, upstreamRepoName] = upstreamRepo.split("/");
-  if (!upstreamOwner || !upstreamRepoName) {
-    throw new Error("Invalid upstream repository format");
+  const [targetOwner, targetRepoName] = targetRepo.split("/");
+  if (!upstreamOwner || !upstreamRepoName || !targetOwner || !targetRepoName) {
+    throw new Error("Invalid repository format");
   }
   const latestTag = await getLatestTag(octokit, upstreamOwner, upstreamRepoName);
   if (!latestTag) {
@@ -24520,98 +24609,39 @@ async function run() {
     return;
   }
   import_core.info(`Latest upstream tag: ${latestTag}`);
-  const [targetOwner, targetRepoName] = targetRepo.split("/");
-  if (!targetOwner || !targetRepoName) {
-    throw new Error("Invalid target repository format");
-  }
-  const labelName = `sync/upstream-${latestTag}`;
-  const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
-    q: `repo:${targetOwner}/${targetRepoName} is:pr label:"${labelName}"`,
-    per_page: 1
-  });
-  if (searchResults.total_count > 0) {
-    import_core.info(`PR for tag ${latestTag} already exists or was previously processed`);
+  const syncLabel = `sync/upstream-${latestTag}`;
+  const syncExists = await checkExistingSync(octokit, targetOwner, targetRepoName, syncLabel);
+  if (syncExists) {
+    import_core.info(`PR for label ${syncLabel} already exists or was previously processed`);
     return;
   }
+  const branchName = `sync/upstream-${latestTag}`;
+  const defaultBranch = await getDefaultBranch(octokit, targetOwner, targetRepoName);
   await import_exec.exec("git", ["config", "--global", "user.name", "github-actions[bot]"]);
   await import_exec.exec("git", ["config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"]);
   await import_exec.exec("git", ["remote", "add", "upstream", `https://github.com/${upstreamRepo}.git`]);
-  await import_exec.exec("git", ["fetch", "upstream", "--tags"]);
-  const branchName = `sync/upstream-${latestTag}`;
-  await import_exec.exec("git", ["checkout", "-b", branchName]);
-  let hasConflicts = false;
-  let mergeMessage = "";
-  try {
-    await import_exec.exec("git", ["merge", latestTag]);
-    mergeMessage = "Successfully merged upstream tag";
-    import_core.info(mergeMessage);
-  } catch (error) {
-    hasConflicts = true;
-    mergeMessage = "Merge conflicts detected. Manual resolution required.";
-    import_core.warning(mergeMessage);
-    await import_exec.exec("git", ["add", "."]);
-    await import_exec.exec("git", ["commit", "--no-verify", "-m", "WIP: Sync with upstream (conflicts to resolve)"]);
-  }
-  await import_exec.exec("git", [
-    "push",
-    `https://x-access-token:${token}@github.com/${targetRepo}.git`,
-    branchName,
-    "--force-with-lease"
-  ]);
-  const { data: repo } = await octokit.rest.repos.get({
-    owner: targetOwner,
-    repo: targetRepoName
-  });
-  const defaultBranch = repo.default_branch;
-  const commonHeader = `This PR ${hasConflicts ? "attempts to" : ""} sync your fork with the upstream repository's tag ${latestTag}.`;
-  const commonChanges = `## Changes included:
-- ${hasConflicts ? "Attempted merge" : "Successfully merged"} with tag ${latestTag}
-- Updates from: https://github.com/${upstreamRepo}`;
-  const commonFooter = `You can safely delete the \`${branchName}\` branch afterward.`;
-  const conflictInstructions = `## ⚠️ Merge Conflicts Detected
-This PR contains merge conflicts that need to be resolved manually. Please:
-1. Checkout this branch locally
-2. Resolve the conflicts
-3. Push the resolved changes back to this branch
+  await import_exec.exec("git", ["fetch", "upstream", `refs/tags/${latestTag}:refs/tags/${latestTag}`, "--no-tags"]);
+  await import_exec.exec("git", ["checkout", "-b", branchName, latestTag]);
+  await import_exec.exec("git", ["push", "origin", branchName, "--force"]);
+  const prTitle = `Sync: Update to upstream ${latestTag}`;
+  const prBody = `This PR syncs with upstream tag ${latestTag}.
 
-### Next Steps:
-1. Resolve conflicts between your customizations and upstream changes
-2. Once conflicts are resolved:
-   - If you want to sync to this tag: merge the PR
-   - If you don't want to sync: close the PR
-3. ${commonFooter}`;
-  const normalInstructions = `Please review the changes and:
-- If you want to sync to this tag: merge the PR
-- If you don't want to sync: close the PR
+## Details
+- Source: ${upstreamRepo}@${latestTag}
+- Target Branch: \`${defaultBranch}\`
+- Sync Branch: \`${branchName}\`
 
-${commonFooter}`;
-  const prBody = `${commonHeader}
-
-${hasConflicts ? conflictInstructions : normalInstructions}
-
-${commonChanges}`;
-  const { data: pr } = await octokit.rest.pulls.create({
-    owner: targetOwner,
-    repo: targetRepoName,
-    title: hasConflicts ? `[Conflicts] Sync with upstream tag ${latestTag}` : `Sync with upstream tag ${latestTag}`,
-    head: branchName,
-    base: defaultBranch,
-    body: prBody
-  });
-  const labels = [labelName];
-  if (hasConflicts) {
-    labels.push("merge-conflicts");
-  }
-  await octokit.rest.issues.addLabels({
-    owner: targetOwner,
-    repo: targetRepoName,
-    issue_number: pr.number,
-    labels
-  });
-  import_core.info(`Created PR #${pr.number}${hasConflicts ? " with merge conflicts" : ""}`);
+This PR was automatically created by the sync action.`;
+  const prNumber = await createPullRequest(octokit, targetOwner, targetRepoName, prTitle, prBody, branchName, defaultBranch, ["sync", syncLabel]);
+  import_core.info(`Created PR #${prNumber} to sync with ${latestTag}`);
 }
 try {
   await run();
 } catch (err) {
-  import_core.setFailed(err instanceof Error ? err.message : "An unknown error occurred");
+  if (err instanceof Error) {
+    import_core.setFailed(err.stack ? `${err.message}
+${err.stack}` : err.message);
+  } else {
+    import_core.setFailed("An unknown error occurred");
+  }
 }
