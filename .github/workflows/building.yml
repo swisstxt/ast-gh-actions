@@ -1,0 +1,37 @@
+name: Building
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project: ['upstream-tag-on-merge', 'upstream-tag-sync']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: bun install
+        working-directory: ./${{ matrix.project }}
+
+      - name: Build
+        run: bun run build
+        working-directory: ./${{ matrix.project }}
+
+      - name: Check if build is committed
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Error: Build artifacts don't match. Please run 'bun run build' and commit the changes."
+            git status
+            exit 1
+          fi
+        working-directory: ./${{ matrix.project }}

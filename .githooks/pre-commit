@@ -1,0 +1,16 @@
+#!/bin/bash
+set -euo
+
+# Print each command before executing
+set -x
+
+# Exit on error, build and lint each project
+for project in upstream-tag-on-merge upstream-tag-sync; do
+    cd $project
+    echo "Building $project..."
+    bun run build
+    git add dist
+    echo "Linting $project..."
+    bun run lint
+    cd ..
+done

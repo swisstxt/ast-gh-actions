@@ -1,0 +1,33 @@
+name: Linting
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - '**/**.ts'
+      - '**/**.tsx'
+      - '**/package.json'
+      - '**/bun.lockb'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project: ['upstream-tag-on-merge', 'upstream-tag-sync']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: bun install
+        working-directory: ./${{ matrix.project }}
+
+      - name: Run ESLint
+        run: bun run lint
+        working-directory: ./${{ matrix.project }}
