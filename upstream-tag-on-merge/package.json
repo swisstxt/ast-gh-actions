@@ -31,6 +31,6 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "lint:staged": "lint-staged",
     "type-check": "tsc --noEmit",
-    "prepare": "git config core.hooksPath .githook"
+    "prepare": "git config core.hooksPath .githooks"
   }
 }
