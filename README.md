@@ -16,29 +16,10 @@ This runs automatically when installing dependencies in the root directory.
 
 When adding a new action, update `.githooks/pre-commit` to include your project:
 
-```bash
-#!/bin/bash
-# set -e exits on error, making `|| exit 1` redundant
-set -euo
-
-# Print each command before executing
-set -x
-
-for project in upstream-tag-on-merge upstream-tag-sync my-new-action; do
-    cd $project
-    echo "Building $project..."
-    bun run build
-    git add dist
-    echo "Linting $project..."
-    bun run lint
-    cd ..
-done
-```
+[Pre-commit Hook](.githooks/pre-commit)
 
 The pre-commit hook:
 
-- Uses bash safety features (`set -euo`)
-- Prints commands for debugging (`set -x`)
 - Builds TypeScript files
 - Stages compiled dist files
 - Runs linting
@@ -47,7 +28,7 @@ The pre-commit hook:
 
 #### Lint
 
-`.github/workflows/lint.yml` runs on PR creation and updates:
+`.github/workflows/linting.yml` runs on PR creation and updates:
 
 - Runs ESLint on all TypeScript files
 - Executes in parallel for each project
@@ -55,7 +36,7 @@ The pre-commit hook:
 
 #### Build Verification
 
-`.github/workflows/verify-build.yml` ensures compiled code matches source:
+`.github/workflows/building.yml` ensures compiled code matches source:
 
 - Cleans and rebuilds TypeScript
 - Compares with committed build artifacts
@@ -158,36 +139,5 @@ export default [
 
 ## Versioning and Releasing
 
-### Versioning
-
-- Repository uses unified versioning across all actions
-- Use major version tags (v1, v2, etc.)
-- Tag both the specific commit and major version:
-
-```bash
-# For first release or updates within v1
-git tag -a v1 -m "v1 release"
-git push origin v1
-
-# For breaking changes in any action
-git tag -a v2 -m "v2 release"
-git push origin v2
-```
-
-### Usage
-
-Reference actions using major version tags:
-
-```yaml
-# All actions in the repo share the same version
-uses: swisstxt/ast-gh-actions/action1@v1
-uses: swisstxt/ast-gh-actions/action2@v1
-```
-
-### Best Practices
-
-- Coordinate breaking changes across actions
-- Force-update major version tags for non-breaking updates
-- Create new major version (v2, v3) when any action has breaking changes
-- Document changes in release notes
-- Keep old major versions available for compatibility
+Follow github best practice:
+<https://docs.github.com/en/actions/sharing-automations/creating-actions/about-custom-actions#using-tags-for-release-management>
