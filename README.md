@@ -6,13 +6,9 @@ A library or collection of AST github shared composite actions.
 
 ### Git Pre-commit Hook
 
-The repository uses a pre-commit hook to run linting on all TypeScript projects. To enable:
+The repository uses a pre-commit hook to run linting on all TypeScript projects.
 
-```bash
-git config core.hooksPath .githooks
-```
-
-This runs automatically when installing dependencies in the root directory.
+This runs automatically when installing dependencies in the root directory of the actions.
 
 When adding a new action, update `.githooks/pre-commit` to include your project:
 

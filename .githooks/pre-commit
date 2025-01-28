@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo
+set -euo pipefail
 
 # Print each command before executing
 set -x
