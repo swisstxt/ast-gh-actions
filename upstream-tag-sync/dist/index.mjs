@@ -5070,6 +5070,13 @@ var require_body = __commonJS((exports, module) => {
   var { isUint8Array, isArrayBuffer } = __require("util/types");
   var { File: UndiciFile } = require_file();
   var { parseMIMEType, serializeAMimeType } = require_dataURL();
+  var random;
+  try {
+    const crypto = __require("node:crypto");
+    random = (max) => crypto.randomInt(0, max);
+  } catch {
+    random = (max) => Math.floor(Math.random(max));
+  }
   var ReadableStream = globalThis.ReadableStream;
   var File = NativeFile ?? UndiciFile;
   var textEncoder = new TextEncoder;
@@ -5110,7 +5117,7 @@ var require_body = __commonJS((exports, module) => {
     } else if (ArrayBuffer.isView(object)) {
       source = new Uint8Array(object.buffer.slice(object.byteOffset, object.byteOffset + object.byteLength));
     } else if (util.isFormDataLike(object)) {
-      const boundary = `----formdata-undici-0${`${Math.floor(Math.random() * 100000000000)}`.padStart(11, "0")}`;
+      const boundary = `----formdata-undici-0${`${random(100000000000)}`.padStart(11, "0")}`;
       const prefix = `--${boundary}\r
 Content-Disposition: form-data`;
       /*! formdata-polyfill. MIT License. Jimmy Wärting <https://jimmy.warting.se/opensource> */
