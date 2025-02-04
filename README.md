@@ -63,14 +63,7 @@ strategy:
     project: ['upstream-tag-on-merge', 'upstream-tag-sync', 'my-new-action']
 ```
 
-4. Required files:
-
-- `src/index.ts` - Action source code
-- `action.yml` - Action metadata
-- `package.json` - Dependencies and scripts
-- `tsconfig.json` - TypeScript configuration
-
-5. Required files and configurations:
+4. Required scripts:
 
 `package.json` scripts:
 
@@ -79,58 +72,9 @@ strategy:
   "scripts": {
     "build": "bun install && bun build src/index.ts --outdir=dist --target=node --entry-naming '[name].mjs'",
     "lint": "eslint . \"**/*.ts\"",
-    "format": "prettier --write \"src/**/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\"",
-    "lint:staged": "lint-staged",
-    "type-check": "tsc --noEmit",
     "prepare": "git config core.hooksPath .githooks"
   }
 }
-```
-
-`.lintstagedrc`:
-
-```json
-{
-    "*.{js,ts,mjs}": [
-        "eslint --fix",
-        "prettier --write"
-    ],
-    "*.{json,yml,yaml,md}": [
-        "prettier --write"
-    ]
-}
-```
-
-`eslint.config.js`:
-
-```javascript
-import js from "@eslint/js";
-import tseslint from "typescript-eslint";
-
-export default [
-  {
-    ignores: ["eslint.config.js", "dist"],
-  },
-  js.configs.recommended,
-  ...tseslint.configs.stylisticTypeChecked,
-  {
-    files: ["**/*.ts"],
-    languageOptions: {
-      parserOptions: {
-        project: true,
-        tsconfigRootDir: import.meta.dirname,
-      },
-    },
-    rules: {
-      "@typescript-eslint/no-explicit-any": "error",
-      "@typescript-eslint/explicit-function-return-type": "error",
-      "@typescript-eslint/no-unused-vars": "error",
-      "@typescript-eslint/no-floating-promises": "error",
-      "no-console": "error",
-    },
-  },
-];
 ```
 
 ## Versioning and Releasing
