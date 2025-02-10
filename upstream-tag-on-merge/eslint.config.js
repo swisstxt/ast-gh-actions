@@ -3,7 +3,7 @@ import tseslint from "typescript-eslint";
 
 export default [
   {
-    ignores: ["eslint.config.js"],
+    ignores: ["eslint.config.js", "dist"],
   },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,

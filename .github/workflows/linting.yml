@@ -1,0 +1,28 @@
+name: Linting
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project: ['upstream-tag-on-merge', 'upstream-tag-sync']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: v1.2.1
+
+      - name: Install Dependencies
+        run: bun install --frozen-lockfile
+        working-directory: ./${{ matrix.project }}
+
+      - name: Run linter
+        run: bun run lint
+        working-directory: ./${{ matrix.project }}

@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+# Print each command before executing
+set -x
+
+# Exit on error, build and lint each project
+for project in upstream-tag-on-merge upstream-tag-sync; do
+    cd $project
+    bun run build
+    git add dist
+    bun run lint
+    cd ..
+done
