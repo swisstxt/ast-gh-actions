@@ -18789,7 +18789,9 @@ import { tmpdir } from "node:os";
 import path, { sep } from "node:path";
 var scriptUrl = "https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash";
 var main = async () => {
+  import_core.debug(`Fetching download-actionlint.bash from ${scriptUrl}`);
   const scriptResponse = await fetch(scriptUrl);
+  import_core.debug(`Fetch response status code: ${scriptResponse.status.toString()}`);
   const scriptText = await scriptResponse.text();
   const actualHash = createHash("sha256").update(scriptText).digest("hex");
   const expectedHash = import_core.getInput("expected-hash", { required: true });
@@ -18800,12 +18802,15 @@ var main = async () => {
   }
   const tempDir = mkdtempSync(`${tmpdir()}${sep}`);
   const tempPath = path.join(tempDir, "download-actionlint.bash");
+  import_core.debug(`Downloading download-actionlint.bash to "${tempPath}"`);
   writeFileSync(tempPath, scriptText);
   try {
+    import_core.debug(`Installing actionlint version ${actionLintVersion}`);
     execSync(`bash ${tempPath} "${actionLintVersion}"`, {
       stdio: "inherit"
     });
   } finally {
+    import_core.debug("Cleaning up temporary directory");
     rmSync(tempDir, { recursive: true });
   }
 };
