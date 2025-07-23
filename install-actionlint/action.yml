@@ -1,0 +1,17 @@
+name: 'Install actionlint'
+description: 'Installs actionlint from rhysd/actionlint, verifying the hash of the install script.'
+branding:
+  icon: 'download'
+  color: 'yellow'
+inputs:
+  expected-hash:
+    description: "Expected hash of the install script"
+    required: false
+    default: '28a0e78b3230372051c5a77840125aa2c8dc7804fce3696ef29dd52001ec3a8f'
+  actionlint-version:
+    description: "Target version of `actionlint` to install"
+    required: false
+    default: 'latest'
+runs:
+  using: 'node20'
+  main: 'dist/index.mjs'

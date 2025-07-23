@@ -63,7 +63,14 @@ strategy:
     project: ['upstream-tag-on-merge', 'upstream-tag-sync', 'my-new-action']
 ```
 
-4. Required scripts:
+4. Add to `.githooks/pre-commit`:
+```sh
+for project in upstream-tag-on-merge upstream-tag-sync my-new-action; do
+# ...
+done
+```
+
+5. Required scripts:
 
 `package.json` scripts:
 
