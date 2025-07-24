@@ -5,7 +5,7 @@ set -euo pipefail
 set -x
 
 # Exit on error, build and lint each project
-for project in upstream-tag-on-merge upstream-tag-sync; do
+for project in upstream-tag-on-merge upstream-tag-sync install-actionlint; do
     cd $project
     bun run build
     git add dist
