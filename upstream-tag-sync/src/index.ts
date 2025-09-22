@@ -203,14 +203,20 @@ async function checkExistingSync(
   octokit: OctokitClient,
   owner: string,
   repo: string,
-  syncLabel: string
+  syncLabel: string,
+  includeClosed = true
 ): Promise<boolean> {
   return retryWithGitHubRateLimit(async () => {
-    const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
-      q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:pr`,
-      per_page: 1
+    const { data: items } = await octokit.rest.issues.listForRepo({
+      owner,
+      repo,
+      labels: syncLabel,
+      state: includeClosed ? 'all' : 'open',
+      per_page: 1,
+      sort: 'created',
+      direction: 'desc',
     });
-    return searchResults.total_count > 0;
+    return items.some(i => !!(i as any).pull_request);
   });
 }
 

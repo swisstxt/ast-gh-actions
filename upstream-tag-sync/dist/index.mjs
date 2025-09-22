@@ -24526,13 +24526,18 @@ async function getDefaultBranch(octokit, owner, repo) {
     return repository.default_branch;
   });
 }
-async function checkExistingSync(octokit, owner, repo, syncLabel) {
+async function checkExistingSync(octokit, owner, repo, syncLabel, includeClosed = true) {
   return retryWithGitHubRateLimit(async () => {
-    const { data: searchResults } = await octokit.rest.search.issuesAndPullRequests({
-      q: `repo:${owner}/${repo}+label:"${syncLabel}"+is:pr`,
-      per_page: 1
+    const { data: items } = await octokit.rest.issues.listForRepo({
+      owner,
+      repo,
+      labels: syncLabel,
+      state: includeClosed ? "all" : "open",
+      per_page: 1,
+      sort: "created",
+      direction: "desc"
     });
-    return searchResults.total_count > 0;
+    return items.some((i) => !!i.pull_request);
   });
 }
 async function createPullRequest(octokit, owner, repo, title, body, head, base, labels) {
