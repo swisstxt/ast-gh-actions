@@ -207,6 +207,8 @@ async function checkExistingSync(
   includeClosed = true
 ): Promise<boolean> {
   return retryWithGitHubRateLimit(async () => {
+    // We use `octokit.rest.issues.listForRepo()` because `octokit.rest.pulls.list()` doesn’t have a `labels` filter
+    // See: https://octokit.github.io/rest.js/v22/#pulls-list
     const { data: items } = await octokit.rest.issues.listForRepo({
       owner,
       repo,
@@ -254,6 +256,7 @@ async function createPullRequest(
     });
 
     if (labels.length > 0) {
+      // We use `octokit.rest.issues.addLabels()` because `octokit.rest.pulls.*` methods don't have the ability to add/remove labels
       await octokit.rest.issues.addLabels({
         owner,
         repo,
