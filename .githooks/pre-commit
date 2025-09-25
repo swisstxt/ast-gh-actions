@@ -8,7 +8,7 @@ set -x
 for project in upstream-tag-on-merge upstream-tag-sync install-actionlint; do
     cd $project
     bun run build
-    git add dist
+    git add dist -f
     bun run lint
     cd ..
 done
